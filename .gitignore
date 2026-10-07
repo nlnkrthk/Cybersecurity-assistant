@@ -1,0 +1,115 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# PySpark
+metastore_db/
+derby.log
+.spark-*
+
+# Data files (raw)
+MachineLearningCVE/
+
+# Processed data
+data/processed/
+data/logs/
+*.parquet
+*.csv
+*.pkl
+*.json
+
+# Chroma vector database
+chroma/
+.chroma/
+
+# Cache
+.cache/
+*.cache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Project specific
+notes.txt
+scratch/
+tmp/
+temp/
+
+# Logs
+logs/
+*.log
+
+# IDE settings
+.project
+.pydevproject
+.settings/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+.coverage
+htmlcov/
+
+# Node modules (if applicable)
+node_modules/
+package-lock.json
+
+# Requirements locks
+poetry.lock
+Pipfile.lock
+
+MachineLearningCVE/*
+
+
+tests/
+
+data/logs/*
+data/processed/*
+
+

@@ -1,0 +1,65 @@
+APCIRA Hybrid Search Query Examples
+===================================
+
+Enter any of these phrases at the interactive hybrid-search prompt, or pass
+one as a quoted command-line argument:
+
+    python scripts/search/interactive_hybrid_search.py "PortScan SYN flags"
+
+Hybrid search retrieves and ranks matching incidents using keyword search
+(BM25) and semantic similarity (vector search). It displays incidents; it
+does not generate a written answer to a question.
+
+Attack-type searches
+--------------------
+
+DDoS attack high packet volume
+DoS Hulk long duration
+PortScan SYN flags multiple destinations
+Infiltration unusual forward bytes
+Web Attack SQL Injection
+Web Attack XSS
+Web Attack Brute Force
+Bot attack traffic
+FTP-Patator repeated login attempts
+SSH-Patator authentication attempts
+Heartbleed suspicious traffic
+
+Traffic and flow searches
+-------------------------
+
+TCP reset RST flags
+ACK flags and backward packets
+large forward bytes and short duration
+high backward packet count on destination port 80
+long-duration flow with many packets
+high packet rate and short flow duration
+traffic on destination port 443
+flows with SYN and ACK flags
+
+Question-style searches
+-----------------------
+
+What do DDoS incidents look like in this dataset?
+Find PortScan incidents with SYN flags.
+Show Web Attack SQL Injection traffic.
+Which incidents have large forward byte counts?
+Find flows with RST flags and short durations.
+Show examples of infiltration traffic.
+Find incidents with many backward packets.
+What traffic patterns are associated with Bot incidents?
+Which incidents have long flow durations?
+Find flows communicating over destination port 80.
+
+Tips
+----
+
+- Use attack labels such as DDoS, PortScan, Bot, Infiltration, and
+  Web Attack - XSS to search for specific incident categories.
+- Add flow terms such as protocol, port, packet count, byte count, duration,
+  SYN, ACK, or RST to narrow the search.
+- Question-style input is treated as a search query, not as a request for a
+  generated explanation. Use scripts/search/interactive_rag.py for question
+  answering, which requires its configured Anthropic API access.
+- BENIGN flows do not include the word "BENIGN" in their generated incident
+  text, so searching for that exact label may not reliably retrieve them.
