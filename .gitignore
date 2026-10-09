@@ -112,4 +112,6 @@ tests/
 data/logs/*
 data/processed/*
 
-
+# Keep the ML notebooks and trained model in version control.
+!ml/**/*.ipynb
+!ml/**/*.pkl
