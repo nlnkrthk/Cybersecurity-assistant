@@ -241,3 +241,16 @@ CHROMA_COLLECTION_NAME = "incidents"
 RRF_K = 60  # Constant for Reciprocal Rank Fusion formula
 BM25_WEIGHT = 1.0
 VECTOR_WEIGHT = 1.0
+
+# ============================================================================
+# ML models (attack classifier, intrusion risk, anomaly detector) and references
+# ============================================================================
+ML_MODELS_DIR = PROJECT_ROOT / "ml" / "models"
+ATTACK_CLASSIFIER_FILE = ML_MODELS_DIR / "attack_classifier.pkl"
+ATTACK_CLASSIFIER_META_FILE = ML_MODELS_DIR / "attack_classifier_meta.json"
+INTRUSION_RISK_FILE = ML_MODELS_DIR / "intrusion_risk.pkl"
+INTRUSION_RISK_META_FILE = ML_MODELS_DIR / "intrusion_risk_meta.json"
+ANOMALY_DETECTOR_FILE = ML_MODELS_DIR / "anomaly_detector.pkl"
+ANOMALY_DETECTOR_META_FILE = ML_MODELS_DIR / "anomaly_detector_meta.json"
+FEATURE_REFERENCE_FILE = ML_MODELS_DIR / "feature_reference.json"
+ATTACK_PROFILES_FILE = ML_MODELS_DIR / "attack_type_profiles.json"

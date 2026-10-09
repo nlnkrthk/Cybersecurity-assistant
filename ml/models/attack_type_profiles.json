@@ -1,0 +1,786 @@
+{
+  "Bot": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "total_bwd_packets",
+        "display_name": "Backward packets",
+        "unit": "packets",
+        "shap_share": 0.1006,
+        "attack_median": 3.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 69.3,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.0972,
+        "attack_median": 82807.0,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 54.1,
+        "direction_vs_normal": "similar"
+      },
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0895,
+        "attack_median": 88.703074405,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 60.4,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0777,
+        "attack_median": 38.015603315,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 63.8,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packet_length_mean",
+        "display_name": "Mean backward packet size",
+        "unit": "bytes",
+        "shap_share": 0.0748,
+        "attack_median": 8.5018552875,
+        "benign_median": 95.0,
+        "median_benign_percentile": 30.0,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Backward packets typically higher than normal (median 3 vs 2); Flow duration similar to normal but distinctive in combination; Flow packet rate typically higher than normal (median 88.70 vs 63.92); Backward packet rate typically higher than normal (median 38.02 vs 18.98); Mean backward packet size typically lower than normal (median 8.50 vs 95)"
+  },
+  "DDoS": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.1043,
+        "attack_median": 229.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 69.0,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_len_bwd",
+        "display_name": "Backward bytes",
+        "unit": "bytes",
+        "shap_share": 0.1042,
+        "attack_median": 11601.0,
+        "benign_median": 163.0,
+        "median_benign_percentile": 95.1,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packet_length_mean",
+        "display_name": "Mean backward packet size",
+        "unit": "bytes",
+        "shap_share": 0.0934,
+        "attack_median": 1934.5,
+        "benign_median": 95.0,
+        "median_benign_percentile": 99.9,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_len_fwd",
+        "display_name": "Forward bytes",
+        "unit": "bytes",
+        "shap_share": 0.089,
+        "attack_median": 26.0,
+        "benign_median": 72.0,
+        "median_benign_percentile": 23.7,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "fwd_packet_length_mean",
+        "display_name": "Mean forward packet size",
+        "unit": "bytes",
+        "shap_share": 0.0865,
+        "attack_median": 7.8333333335,
+        "benign_median": 40.0,
+        "median_benign_percentile": 24.0,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Initial TCP window (backward) typically higher than normal (median 229 vs 0); Backward bytes typically higher than normal (median 11,601 vs 163); Mean backward packet size typically higher than normal (median 1,934.50 vs 95); Forward bytes typically lower than normal (median 26 vs 72); Mean forward packet size typically lower than normal (median 7.83 vs 40)"
+  },
+  "DoS GoldenEye": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "total_len_bwd",
+        "display_name": "Backward bytes",
+        "unit": "bytes",
+        "shap_share": 0.0771,
+        "attack_median": 3525.0,
+        "benign_median": 163.0,
+        "median_benign_percentile": 83.7,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "packet_length_std",
+        "display_name": "Packet size std. dev.",
+        "unit": "bytes",
+        "shap_share": 0.0759,
+        "attack_median": 1137.171249,
+        "benign_median": 35.21836642,
+        "median_benign_percentile": 98.1,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packet_length_mean",
+        "display_name": "Mean backward packet size",
+        "unit": "bytes",
+        "shap_share": 0.0736,
+        "attack_median": 881.25,
+        "benign_median": 95.0,
+        "median_benign_percentile": 95.6,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0735,
+        "attack_median": 0.35092389700000004,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 25.8,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "max_packet_length",
+        "display_name": "Maximum packet size",
+        "unit": "bytes",
+        "shap_share": 0.0645,
+        "attack_median": 3525.0,
+        "benign_median": 111.0,
+        "median_benign_percentile": 96.8,
+        "direction_vs_normal": "higher"
+      }
+    ],
+    "summary": "Backward bytes typically higher than normal (median 3,525 vs 163); Packet size std. dev. typically higher than normal (median 1,137.17 vs 35.22); Mean backward packet size typically higher than normal (median 881.25 vs 95); Backward packet rate typically lower than normal (median 0.35 vs 18.98); Maximum packet size typically higher than normal (median 3,525 vs 111)"
+  },
+  "DoS Hulk": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "packet_length_std",
+        "display_name": "Packet size std. dev.",
+        "unit": "bytes",
+        "shap_share": 0.1205,
+        "attack_median": 1639.168591,
+        "benign_median": 35.21836642,
+        "median_benign_percentile": 99.2,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packet_length_mean",
+        "display_name": "Mean backward packet size",
+        "unit": "bytes",
+        "shap_share": 0.1198,
+        "attack_median": 1932.5,
+        "benign_median": 95.0,
+        "median_benign_percentile": 99.9,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_len_bwd",
+        "display_name": "Backward bytes",
+        "unit": "bytes",
+        "shap_share": 0.1125,
+        "attack_median": 11595.0,
+        "benign_median": 163.0,
+        "median_benign_percentile": 95.1,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "max_packet_length",
+        "display_name": "Maximum packet size",
+        "unit": "bytes",
+        "shap_share": 0.0655,
+        "attack_median": 5792.0,
+        "benign_median": 111.0,
+        "median_benign_percentile": 99.1,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.0595,
+        "attack_median": 235.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 69.7,
+        "direction_vs_normal": "higher"
+      }
+    ],
+    "summary": "Packet size std. dev. typically higher than normal (median 1,639.17 vs 35.22); Mean backward packet size typically higher than normal (median 1,932.50 vs 95); Backward bytes typically higher than normal (median 11,595 vs 163); Maximum packet size typically higher than normal (median 5,792 vs 111); Initial TCP window (backward) typically higher than normal (median 235 vs 0)"
+  },
+  "DoS Slowhttptest": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0991,
+        "attack_median": 0.110903166,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 2.2,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0899,
+        "attack_median": 0.0,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 4.5,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "active_mean",
+        "display_name": "Mean active time",
+        "unit": "\u00b5s",
+        "shap_share": 0.0774,
+        "attack_median": 7004652.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 99.8,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.0746,
+        "attack_median": 63120872.5,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 88.9,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "fwd_packets_s",
+        "display_name": "Forward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0709,
+        "attack_median": 0.110889086,
+        "benign_median": 32.35041975515,
+        "median_benign_percentile": 4.3,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Flow packet rate typically lower than normal (median 0.11 vs 63.92); Backward packet rate typically lower than normal (median 0 vs 18.98); Mean active time typically higher than normal (median 7,004,652 vs 0); Flow duration typically higher than normal (median 63,120,872.50 vs 61,793); Forward packet rate typically lower than normal (median 0.11 vs 32.35)"
+  },
+  "DoS slowloris": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0912,
+        "attack_median": 0.028191932000000003,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 9.8,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0891,
+        "attack_median": 0.179707887,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 3.4,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.0687,
+        "attack_median": 102290612.5,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 92.7,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "packet_length_std",
+        "display_name": "Packet size std. dev.",
+        "unit": "bytes",
+        "shap_share": 0.0613,
+        "attack_median": 4.618802154,
+        "benign_median": 35.21836642,
+        "median_benign_percentile": 25.1,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "total_bwd_packets",
+        "display_name": "Backward packets",
+        "unit": "packets",
+        "shap_share": 0.0612,
+        "attack_median": 2.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 54.9,
+        "direction_vs_normal": "similar"
+      }
+    ],
+    "summary": "Backward packet rate typically lower than normal (median 0.03 vs 18.98); Flow packet rate typically lower than normal (median 0.18 vs 63.92); Flow duration typically higher than normal (median 102,290,612.50 vs 61,793); Packet size std. dev. typically lower than normal (median 4.62 vs 35.22); Backward packets similar to normal but distinctive in combination"
+  },
+  "FTP-Patator": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "total_bwd_packets",
+        "display_name": "Backward packets",
+        "unit": "packets",
+        "shap_share": 0.2351,
+        "attack_median": 15.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 90.5,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_fwd_packets",
+        "display_name": "Forward packets",
+        "unit": "packets",
+        "shap_share": 0.1039,
+        "attack_median": 9.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 81.2,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.0735,
+        "attack_median": 8968367.0,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 81.6,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0694,
+        "attack_median": 1.6574574960000001,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 34.7,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0672,
+        "attack_median": 2.676072521,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 25.3,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Backward packets typically higher than normal (median 15 vs 2); Forward packets typically higher than normal (median 9 vs 2); Flow duration typically higher than normal (median 8,968,367 vs 61,793); Backward packet rate typically lower than normal (median 1.66 vs 18.98); Flow packet rate typically lower than normal (median 2.68 vs 63.92)"
+  },
+  "Heartbleed": {
+    "n_rows_explained": 11,
+    "top_features": [
+      {
+        "feature": "bwd_packet_length_mean",
+        "display_name": "Mean backward packet size",
+        "unit": "bytes",
+        "shap_share": 0.1887,
+        "attack_median": 3773.303973,
+        "benign_median": 95.0,
+        "median_benign_percentile": 100.1,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "packet_length_mean",
+        "display_name": "Mean packet size",
+        "unit": "bytes",
+        "shap_share": 0.178,
+        "attack_median": 1620.054165,
+        "benign_median": 66.33333333,
+        "median_benign_percentile": 100.0,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_len_bwd",
+        "display_name": "Backward bytes",
+        "unit": "bytes",
+        "shap_share": 0.15,
+        "attack_median": 7878135.0,
+        "benign_median": 163.0,
+        "median_benign_percentile": 100.0,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "max_packet_length",
+        "display_name": "Maximum packet size",
+        "unit": "bytes",
+        "shap_share": 0.1055,
+        "attack_median": 14480.0,
+        "benign_median": 111.0,
+        "median_benign_percentile": 100.0,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_fwd_packets",
+        "display_name": "Forward packets",
+        "unit": "packets",
+        "shap_share": 0.0835,
+        "attack_median": 2792.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 100.0,
+        "direction_vs_normal": "higher"
+      }
+    ],
+    "summary": "Mean backward packet size typically higher than normal (median 3,773.30 vs 95); Mean packet size typically higher than normal (median 1,620.05 vs 66.33); Backward bytes typically higher than normal (median 7,878,135 vs 163); Maximum packet size typically higher than normal (median 14,480 vs 111); Forward packets typically higher than normal (median 2,792 vs 2)"
+  },
+  "Infiltration": {
+    "n_rows_explained": 36,
+    "top_features": [
+      {
+        "feature": "total_len_fwd",
+        "display_name": "Forward bytes",
+        "unit": "bytes",
+        "shap_share": 0.1769,
+        "attack_median": 7020.0,
+        "benign_median": 72.0,
+        "median_benign_percentile": 97.7,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_bwd_packets",
+        "display_name": "Backward packets",
+        "unit": "packets",
+        "shap_share": 0.1271,
+        "attack_median": 26.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 95.9,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "fwd_packet_length_mean",
+        "display_name": "Mean forward packet size",
+        "unit": "bytes",
+        "shap_share": 0.0792,
+        "attack_median": 289.26853265,
+        "benign_median": 40.0,
+        "median_benign_percentile": 96.8,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_fwd_packets",
+        "display_name": "Forward packets",
+        "unit": "packets",
+        "shap_share": 0.0757,
+        "attack_median": 26.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 95.9,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.0611,
+        "attack_median": 1452.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 89.5,
+        "direction_vs_normal": "higher"
+      }
+    ],
+    "summary": "Forward bytes typically higher than normal (median 7,020 vs 72); Backward packets typically higher than normal (median 26 vs 2); Mean forward packet size typically higher than normal (median 289.27 vs 40); Forward packets typically higher than normal (median 26 vs 2); Initial TCP window (backward) typically higher than normal (median 1,452 vs 0)"
+  },
+  "PortScan": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.1001,
+        "attack_median": 92.5,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 12.4,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0978,
+        "attack_median": 21627.30886,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 86.0,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0844,
+        "attack_median": 10813.65443,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 89.4,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "fwd_packets_s",
+        "display_name": "Forward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0716,
+        "attack_median": 10813.65443,
+        "benign_median": 32.35041975515,
+        "median_benign_percentile": 85.6,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.066,
+        "attack_median": 0.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 52.1,
+        "direction_vs_normal": "similar"
+      }
+    ],
+    "summary": "Flow duration typically lower than normal (median 92.50 vs 61,793); Flow packet rate typically higher than normal (median 21,627.31 vs 63.92); Backward packet rate typically higher than normal (median 10,813.65 vs 18.98); Forward packet rate typically higher than normal (median 10,813.65 vs 32.35); Initial TCP window (backward) similar to normal but distinctive in combination"
+  },
+  "SSH-Patator": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "total_bwd_packets",
+        "display_name": "Backward packets",
+        "unit": "packets",
+        "shap_share": 0.1901,
+        "attack_median": 32.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 96.7,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_fwd_packets",
+        "display_name": "Forward packets",
+        "unit": "packets",
+        "shap_share": 0.1642,
+        "attack_median": 21.0,
+        "benign_median": 2.0,
+        "median_benign_percentile": 93.5,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "total_len_fwd",
+        "display_name": "Forward bytes",
+        "unit": "bytes",
+        "shap_share": 0.0893,
+        "attack_median": 2008.0,
+        "benign_median": 72.0,
+        "median_benign_percentile": 93.2,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.0869,
+        "attack_median": 247.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 71.5,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0606,
+        "attack_median": 2.664328368,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 36.2,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Backward packets typically higher than normal (median 32 vs 2); Forward packets typically higher than normal (median 21 vs 2); Forward bytes typically higher than normal (median 2,008 vs 72); Initial TCP window (backward) typically higher than normal (median 247 vs 0); Backward packet rate typically lower than normal (median 2.66 vs 18.98)"
+  },
+  "Web Attack - Brute Force": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.2098,
+        "attack_median": 28960.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 94.2,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.1303,
+        "attack_median": 0.729400628,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 15.6,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.125,
+        "attack_median": 5619382.0,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 78.2,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.1233,
+        "attack_median": 0.182350157,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 19.6,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "fwd_packets_s",
+        "display_name": "Forward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.1191,
+        "attack_median": 0.5417167350000001,
+        "benign_median": 32.35041975515,
+        "median_benign_percentile": 17.5,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Initial TCP window (backward) typically higher than normal (median 28,960 vs 0); Flow packet rate typically lower than normal (median 0.73 vs 63.92); Flow duration typically higher than normal (median 5,619,382 vs 61,793); Backward packet rate typically lower than normal (median 0.18 vs 18.98); Forward packet rate typically lower than normal (median 0.54 vs 32.35)"
+  },
+  "Web Attack - Sql Injection": {
+    "n_rows_explained": 20,
+    "top_features": [
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.1182,
+        "attack_median": 1.8813513945,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 22.4,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.1028,
+        "attack_median": 0.799017608,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 30.1,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.0835,
+        "attack_median": 5006147.5,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 74.6,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "fwd_packets_s",
+        "display_name": "Forward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.0827,
+        "attack_median": 0.9987168915,
+        "benign_median": 32.35041975515,
+        "median_benign_percentile": 21.8,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.0809,
+        "attack_median": 235.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 69.7,
+        "direction_vs_normal": "higher"
+      }
+    ],
+    "summary": "Flow packet rate typically lower than normal (median 1.88 vs 63.92); Backward packet rate typically lower than normal (median 0.80 vs 18.98); Flow duration typically higher than normal (median 5,006,147.50 vs 61,793); Forward packet rate typically lower than normal (median 1.00 vs 32.35); Initial TCP window (backward) typically higher than normal (median 235 vs 0)"
+  },
+  "Web Attack - XSS": {
+    "n_rows_explained": 150,
+    "top_features": [
+      {
+        "feature": "init_win_bytes_backward",
+        "display_name": "Initial TCP window (backward)",
+        "unit": "bytes",
+        "shap_share": 0.2535,
+        "attack_median": 28960.0,
+        "benign_median": 0.0,
+        "median_benign_percentile": 94.2,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "flow_duration",
+        "display_name": "Flow duration",
+        "unit": "\u00b5s",
+        "shap_share": 0.1244,
+        "attack_median": 5364394.0,
+        "benign_median": 61793.0,
+        "median_benign_percentile": 76.9,
+        "direction_vs_normal": "higher"
+      },
+      {
+        "feature": "flow_packets_s",
+        "display_name": "Flow packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.1241,
+        "attack_median": 0.7469069740000001,
+        "benign_median": 63.9187683818,
+        "median_benign_percentile": 15.9,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "bwd_packets_s",
+        "display_name": "Backward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.122,
+        "attack_median": 0.1857475635,
+        "benign_median": 18.98345217915,
+        "median_benign_percentile": 19.8,
+        "direction_vs_normal": "lower"
+      },
+      {
+        "feature": "fwd_packets_s",
+        "display_name": "Forward packet rate",
+        "unit": "packets/s",
+        "shap_share": 0.101,
+        "attack_median": 0.5601802300000001,
+        "benign_median": 32.35041975515,
+        "median_benign_percentile": 17.9,
+        "direction_vs_normal": "lower"
+      }
+    ],
+    "summary": "Initial TCP window (backward) typically higher than normal (median 28,960 vs 0); Flow duration typically higher than normal (median 5,364,394 vs 61,793); Flow packet rate typically lower than normal (median 0.75 vs 63.92); Backward packet rate typically lower than normal (median 0.19 vs 18.98); Forward packet rate typically lower than normal (median 0.56 vs 32.35)"
+  }
+}

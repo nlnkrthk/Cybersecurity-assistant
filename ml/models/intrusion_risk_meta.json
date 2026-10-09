@@ -1,0 +1,154 @@
+{
+  "model": "CalibratedClassifierCV(isotonic) over HistGradientBoosting",
+  "trained_at": "2026-10-09T12:57:21",
+  "sklearn_version": "1.7.2",
+  "data_file": "data\\cleaned_network_data\\cleaned_network_data.csv",
+  "excluded_columns": [
+    "dst_port"
+  ],
+  "features": [
+    "flow_duration",
+    "total_fwd_packets",
+    "total_bwd_packets",
+    "total_len_fwd",
+    "total_len_bwd",
+    "flow_packets_s",
+    "fwd_packets_s",
+    "bwd_packets_s",
+    "fwd_packet_length_mean",
+    "bwd_packet_length_mean",
+    "min_packet_length",
+    "max_packet_length",
+    "packet_length_mean",
+    "packet_length_std",
+    "syn_flag_count",
+    "ack_flag_count",
+    "rst_flag_count",
+    "psh_flag_count",
+    "fin_flag_count",
+    "down_up_ratio",
+    "init_win_bytes_forward",
+    "init_win_bytes_backward",
+    "active_mean",
+    "idle_mean"
+  ],
+  "target": "is_intrusion (0 = BENIGN, 1 = any attack)",
+  "output": "risk_probability = model.predict_proba(X)[:, 1]",
+  "decision_threshold": 0.40625,
+  "risk_bands": {
+    "Critical": 0.9,
+    "High": 0.7,
+    "Medium": 0.3,
+    "Low": 0.0
+  },
+  "base_params": {
+    "categorical_features": "from_dtype",
+    "class_weight": "balanced",
+    "early_stopping": "auto",
+    "interaction_cst": null,
+    "l2_regularization": 0.0,
+    "learning_rate": 0.1,
+    "loss": "log_loss",
+    "max_bins": 255,
+    "max_depth": null,
+    "max_features": 1.0,
+    "max_iter": 300,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 20,
+    "monotonic_cst": null,
+    "n_iter_no_change": 10,
+    "random_state": 42,
+    "scoring": "loss",
+    "tol": 1e-07,
+    "validation_fraction": 0.1,
+    "verbose": 0,
+    "warm_start": false
+  },
+  "cv_results": [
+    {
+      "model": "RandomForest",
+      "roc_auc": 0.99876,
+      "pr_auc": 0.99709,
+      "recall": 0.99073,
+      "precision": 0.99401,
+      "roc_auc_std": 0.00033,
+      "fit_time_s": 5.7687
+    },
+    {
+      "model": "HistGradientBoosting",
+      "roc_auc": 0.99973,
+      "pr_auc": 0.99965,
+      "recall": 0.99661,
+      "precision": 0.99228,
+      "roc_auc_std": 4e-05,
+      "fit_time_s": 1.99848
+    }
+  ],
+  "n_train": 52333,
+  "n_calibration": 17444,
+  "n_test": 17445,
+  "test_metrics": {
+    "roc_auc": 0.99975,
+    "pr_auc": 0.99958,
+    "recall": 0.99786,
+    "precision": 0.99084,
+    "f1": 0.99434,
+    "false_alarm_rate": 0.00692,
+    "brier": 0.00377
+  },
+  "per_class_detection": {
+    "BENIGN": 0.0069,
+    "Infiltration": 0.7143,
+    "Web Attack - XSS": 0.9769,
+    "Bot": 0.986,
+    "Web Attack - Brute Force": 0.9886,
+    "DoS slowloris": 0.9962,
+    "DoS Hulk": 0.9987,
+    "DoS GoldenEye": 1.0,
+    "FTP-Patator": 1.0,
+    "DoS Slowhttptest": 1.0,
+    "DDoS": 1.0,
+    "Heartbleed": 1.0,
+    "SSH-Patator": 1.0,
+    "PortScan": 1.0,
+    "Web Attack - Sql Injection": 1.0
+  },
+  "unseen_attack_test": [
+    {
+      "hidden_family": "Web Attack",
+      "test_rows": 398,
+      "risk_model_detected (p>=0.5)": 0.0276,
+      "risk_model_mean_prob": 0.0271,
+      "anomaly_flagged (Medium+)": 0.0,
+      "full_model_detected": 0.9849
+    },
+    {
+      "hidden_family": "Infiltration",
+      "test_rows": 7,
+      "risk_model_detected (p>=0.5)": 0.0,
+      "risk_model_mean_prob": 0.0041,
+      "anomaly_flagged (Medium+)": 0.7143,
+      "full_model_detected": 0.7143
+    },
+    {
+      "hidden_family": "PortScan",
+      "test_rows": 78,
+      "risk_model_detected (p>=0.5)": 0.2179,
+      "risk_model_mean_prob": 0.195,
+      "anomaly_flagged (Medium+)": 0.6282,
+      "full_model_detected": 1.0
+    }
+  ],
+  "top_features": {
+    "init_win_bytes_forward": 0.0668,
+    "bwd_packet_length_mean": 0.01224,
+    "init_win_bytes_backward": 0.00428,
+    "total_fwd_packets": 0.00079,
+    "total_len_bwd": 0.00076,
+    "flow_duration": 0.00046,
+    "idle_mean": 0.00039,
+    "fwd_packets_s": 0.00026,
+    "total_bwd_packets": 0.00021,
+    "bwd_packets_s": 0.00015
+  }
+}
