@@ -115,3 +115,12 @@ data/processed/*
 # Keep the ML notebooks and trained model in version control.
 !ml/**/*.ipynb
 !ml/**/*.pkl
+
+# Include cleaned network data, but keep the data/logs and data/processed
+# directories empty in version control.
+!data/cleaned_network_data/
+!data/cleaned_network_data/**
+!data/logs/
+!data/logs/.gitkeep
+!data/processed/
+!data/processed/.gitkeep
