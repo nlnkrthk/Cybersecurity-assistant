@@ -34,6 +34,21 @@ class _RetrievalOnlyClient:
         return ""
 
 
+def _silence_progress_bar(searcher) -> None:
+    """Query embedding inside a tool call should not print a tqdm bar (embedder.py forces it on)."""
+    model = getattr(getattr(searcher, "embedder", None), "model", None)
+    if model is None or getattr(model, "_quiet_encode", False):
+        return
+    encode = model.encode
+
+    def quiet_encode(*args, **kwargs):
+        kwargs["show_progress_bar"] = False
+        return encode(*args, **kwargs)
+
+    model.encode = quiet_encode
+    model._quiet_encode = True
+
+
 def _get_searcher():
     """Load the BM25 index, Chroma store and embedder once (slow first call)."""
     global _searcher, _frame
@@ -41,7 +56,9 @@ def _get_searcher():
         with _searcher_lock:
             if _searcher is None:
                 logger.info("Loading hybrid search indexes")
-                _searcher, _frame = _default_hybrid_searcher()
+                searcher, frame = _default_hybrid_searcher()
+                _silence_progress_bar(searcher)
+                _searcher, _frame = searcher, frame
     return _searcher, _frame
 
 
