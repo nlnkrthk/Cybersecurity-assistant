@@ -12,6 +12,10 @@ import pytest
 # Tests decide per call whether to judge; a JUDGE_MODE=on in .env must not change them
 # (set before .env is loaded, which never overrides existing variables).
 os.environ["JUDGE_MODE"] = "off"
+# Feedback written during tests goes to a throwaway database, never data/feedback/.
+import tempfile  # noqa: E402
+
+os.environ["FEEDBACK_DB_PATH"] = str(Path(tempfile.mkdtemp(prefix="feedback_tests_")) / "feedback.db")
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))

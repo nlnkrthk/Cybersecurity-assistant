@@ -254,3 +254,14 @@ ANOMALY_DETECTOR_FILE = ML_MODELS_DIR / "anomaly_detector.pkl"
 ANOMALY_DETECTOR_META_FILE = ML_MODELS_DIR / "anomaly_detector_meta.json"
 FEATURE_REFERENCE_FILE = ML_MODELS_DIR / "feature_reference.json"
 ATTACK_PROFILES_FILE = ML_MODELS_DIR / "attack_type_profiles.json"
+
+# Retrained classifier versions (feedback loop). active.json, when present, points the ML
+# service at a promoted version; otherwise ATTACK_CLASSIFIER_FILE is used. Not versioned in git.
+ML_MODEL_VERSIONS_DIR = ML_MODELS_DIR / "versions"
+ACTIVE_CLASSIFIER_POINTER = ML_MODEL_VERSIONS_DIR / "active.json"
+CLEANED_FLOWS_FILE = PROJECT_ROOT / "data" / "cleaned_network_data" / "cleaned_network_data.csv"
+
+# ============================================================================
+# Analyst feedback (SQLite; FEEDBACK_DB_PATH in the environment overrides the location)
+# ============================================================================
+FEEDBACK_DB_FILE = PROJECT_ROOT / "data" / "feedback" / "feedback.db"

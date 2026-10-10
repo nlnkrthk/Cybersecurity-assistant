@@ -64,9 +64,9 @@ def test_docs_and_openapi(client):
         assert path in paths
 
 
-def test_feedback_stub(client):
+def test_feedback_for_unknown_conversation_is_404(client):
     r = client.post("/feedback", json={"thread_id": "t1", "rating": "up"})
-    assert r.status_code == 501
+    assert r.status_code == 404
 
 
 def test_cors_allows_streamlit_only(client):

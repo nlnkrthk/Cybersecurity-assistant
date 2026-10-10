@@ -61,7 +61,9 @@ def input_guard(state: AssistantState) -> Dict[str, Any]:
     trace: List[Dict[str, Any]] = []  # first node of the turn: start a fresh trace
     message = state["messages"][-1]
     check = check_input(message.text)
-    update: Dict[str, Any] = {"trace": trace, "guardrails": {"input": check.to_dict()}, "judgement": None}
+    update: Dict[str, Any] = {
+        "trace": trace, "guardrails": {"input": check.to_dict()}, "judgement": None, "turn_id": uuid.uuid4().hex,
+    }
 
     if check.blocked:
         # Keep the blocked text out of the history that later prompts include.
@@ -419,6 +421,7 @@ class Assistant:
             "trace": state.get("trace", []),
             "guardrails": state.get("guardrails", {}),
             "judgement": state.get("judgement"),
+            "turn_id": state.get("turn_id"),
         }
 
     def judge_llm(self):
@@ -430,6 +433,23 @@ class Assistant:
         from agents.llm import get_judge_model
 
         return get_judge_model()
+
+    def turn_state(self, thread_id: str, turn_id: Optional[str] = None) -> Dict[str, Any]:
+        """State at the end of one turn: the latest turn, or the turn with this turn_id.
+
+        Raises KeyError if the conversation or the turn does not exist.
+        """
+        config = {"configurable": {"thread_id": thread_id}}
+        latest = self.graph.get_state(config).values
+        if not latest.get("messages"):
+            raise KeyError(f"Conversation {thread_id} not found")
+        if turn_id is None or latest.get("turn_id") == turn_id:
+            return latest
+        # History is newest first: the first snapshot with this turn_id is the end of that turn.
+        for snapshot in self.graph.get_state_history(config):
+            if snapshot.values.get("turn_id") == turn_id and not snapshot.next:
+                return snapshot.values
+        raise KeyError(f"Turn {turn_id} not found in conversation {thread_id}")
 
     def judge_last_turn(self, thread_id: str) -> Dict[str, Any]:
         """Grade the latest answer of a conversation (also when it was not judged at the time)."""

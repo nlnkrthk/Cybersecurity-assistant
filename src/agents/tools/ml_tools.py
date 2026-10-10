@@ -73,9 +73,26 @@ def _resolve_flow(args: Dict[str, Any]) -> Tuple[Union[Dict[str, Any], Normalize
     return metrics, None
 
 
+def analyst_feedback(incident_id: str) -> Optional[Dict[str, Any]]:
+    """Labels analysts gave this incident through the feedback loop, if any."""
+    from feedback import corrections_for_incident
+
+    corrections = corrections_for_incident(incident_id)
+    if not corrections:
+        return None
+    label, count = next(iter(corrections.items()))
+    return {
+        "corrected_labels": corrections,
+        "note": f"{count} analyst correction(s) say this incident is {label}. This is human feedback, "
+                "separate from the model prediction and the historical label.",
+    }
+
+
 def _with_context(result: Dict[str, Any], context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out = compact_result(result)
     if context:
+        feedback = analyst_feedback(context["incident_id"])
+        context = {**context, "analyst_feedback": feedback} if feedback else context
         out = {"incident": context, **out}
     return out
 
@@ -237,6 +254,7 @@ def lookup_incident(incident_id: str) -> Dict[str, Any]:
         "dst_port": incident.dst_port,
         "input": compact_input(incident.flow.to_dict()),
         "metrics": metrics,
+        **({"analyst_feedback": feedback} if (feedback := analyst_feedback(incident.incident_id)) else {}),
     })
 
 

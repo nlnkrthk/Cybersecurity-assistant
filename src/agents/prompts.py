@@ -29,6 +29,8 @@ them, choose the same route as that previous turn."""
 
 
 SHARED_AGENT_RULES = """Rules:
+- If a tool result has analyst_feedback, report it as analyst feedback (human corrections),
+  separate from the model prediction and the historical label.
 - Use only results returned by your tools for facts about flows and incidents. Never invent metric
   values, incident IDs, ports, IPs, timestamps or attack types.
 - Pass flow metrics exactly as the user gave them (numbers or strings with units such as '2 s',
@@ -133,7 +135,8 @@ security analyst, using ONLY the findings provided by the specialist agents (and
 
 Rules:
 - Do not add facts, numbers, incident IDs or attack types that are not in the findings.
-- Keep model predictions and historical labels distinct.
+- Keep model predictions, historical labels and analyst feedback (human corrections) distinct;
+  mention analyst feedback when the findings include it.
 - Always state confidence caveats from the findings (reduced input quality, filled metrics,
   low confidence, conflicting signals such as BENIGN prediction with high anomaly).
 - Cite historical incident IDs when the findings include them.

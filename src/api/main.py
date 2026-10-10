@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.deps import AppState  # noqa: E402
-from api.routes import chat, judge, ml, search, system  # noqa: E402
+from api.routes import chat, feedback, judge, ml, search, system  # noqa: E402
 
 logger = logging.getLogger("api")
 
@@ -120,6 +120,7 @@ def create_app(assistant: Optional[Any] = None, load_search_index: bool = True) 
     app.include_router(system.router)
     app.include_router(chat.router)
     app.include_router(judge.router)
+    app.include_router(feedback.router)
     app.include_router(ml.router)
     app.include_router(search.router)
     return app

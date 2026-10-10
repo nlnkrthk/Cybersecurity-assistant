@@ -58,6 +58,7 @@ class ChatResponse(BaseModel):
     evidence: List[Dict[str, Any]] = Field(default=[], description="Every tool call this turn: agent, tool, args, result.")
     trace: List[Dict[str, Any]] = Field(default=[], description="Guardrail, route, agent, tool and final-answer events.")
     guardrails: Dict[str, Any] = {}
+    turn_id: Optional[str] = Field(default=None, description="ID of this turn; send it with POST /feedback.")
     judgement: Optional[Dict[str, Any]] = Field(
         default=None, description="LLM-as-Judge result when requested: verdict, overall, scores, reasons, unsupported claims."
     )
@@ -148,9 +149,22 @@ class JudgeResponse(BaseModel):
 # ============================================================================
 class FeedbackRequest(BaseModel):
     thread_id: str = Field(pattern=THREAD_ID_PATTERN)
+    turn_id: Optional[str] = Field(
+        default=None, pattern=THREAD_ID_PATTERN,
+        description="Turn to rate (from the chat response). Omit to rate the conversation's latest answer.",
+    )
     rating: Literal["up", "down"]
     comment: Optional[str] = Field(default=None, max_length=2000)
-    corrected_label: Optional[str] = Field(default=None, description="Correct attack type, if the prediction was wrong.")
+    corrected_label: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Correct attack type, if the prediction was wrong (one of the 15 types; case-insensitive).",
+    )
+
+    model_config = ConfigDict(json_schema_extra={"examples": [
+        {"thread_id": "3f2a9c...", "rating": "up"},
+        {"thread_id": "3f2a9c...", "rating": "down", "comment": "This is XSS, not brute force",
+         "corrected_label": "Web Attack - XSS"},
+    ]})
 
 
 class HealthResponse(BaseModel):
@@ -160,6 +174,7 @@ class HealthResponse(BaseModel):
     assistant_ready: bool
     assistant_error: Optional[str] = None
     llm_model: Optional[str] = None
+    classifier_version: Optional[str] = Field(default=None, description='"original" or a retrained version.')
     search_index: Literal["not_loaded", "loading", "ready", "error"]
     search_index_error: Optional[str] = None
     versions: Dict[str, str]

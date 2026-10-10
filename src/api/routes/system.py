@@ -1,14 +1,13 @@
 """
-Health and feedback endpoints.
+Health endpoint.
 """
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
 
 from api.deps import AppState, get_state
-from api.schemas import FeedbackRequest, HealthResponse
+from api.schemas import HealthResponse
 
 router = APIRouter(tags=["system"])
 
@@ -41,13 +40,9 @@ def health(state: AppState = Depends(get_state)) -> Dict[str, Any]:
         "assistant_ready": state.assistant is not None,
         "assistant_error": state.assistant_error,
         "llm_model": state.llm_model,
+        "classifier_version": getattr(state.ml_service, "classifier_version", None),
         "search_index": state.search_index,
         "search_index_error": state.search_index_error,
         "versions": _versions(),
     }
 
-
-@router.post("/feedback", status_code=501, summary="Rate an answer (coming soon)")
-def feedback(body: FeedbackRequest) -> JSONResponse:
-    """Thumbs up/down and an optional corrected attack type for an answer. Not stored yet."""
-    return JSONResponse(status_code=501, content={"detail": "Feedback storage is not implemented yet."})

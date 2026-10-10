@@ -12,7 +12,14 @@ route, each agent that runs, every tool it calls with a one-line result, and tim
 
 The conversation is remembered, so you can answer follow-up questions and refer
 back to earlier flows. With --judge (or 'judge on') every answer is also graded by
-LLM-as-Judge. Commands: new, trace on|off, judge on|off, quit.
+LLM-as-Judge.
+
+Rate the last answer with 'feedback up [comment]', 'feedback down [comment]' or
+'feedback correct <attack type>' (e.g. feedback correct Web Attack - XSS);
+'feedback stats' shows the summary. Corrections appear in later answers about the same
+incident and are used when the classifier is retrained (scripts/feedback/).
+
+Commands: new, trace on|off, judge on|off, feedback ..., quit.
 """
 
 import argparse
@@ -52,6 +59,56 @@ EXAMPLES = [
 TRACE_HEADER = "-" * 34 + " agent trace " + "-" * 33
 
 
+def handle_feedback(assistant, state, args: str) -> None:
+    """feedback up|down [comment] / feedback correct <attack type> / feedback stats"""
+    from feedback import get_feedback_store
+    from feedback.service import FeedbackError, record_feedback
+
+    command, _, rest = args.partition(" ")
+    command = command.lower()
+    if command == "stats":
+        print_feedback_stats(get_feedback_store().stats())
+        return
+    if command not in {"up", "down", "correct"}:
+        print("[INFO] Use: feedback up [comment] | feedback down [comment] | feedback correct <attack type> | feedback stats")
+        return
+    if not state["turn"]:
+        print("[INFO] Ask a question first; feedback applies to the last answer.")
+        return
+    if command == "correct" and not rest.strip():
+        print("[INFO] Give the correct attack type, e.g. feedback correct Web Attack - XSS")
+        return
+    try:
+        row = record_feedback(
+            assistant,
+            thread_id=state["thread"],
+            turn_id=state["turn"],
+            rating="down" if command == "correct" else command,
+            comment=None if command == "correct" else rest,
+            corrected_label=rest.strip() if command == "correct" else None,
+        )
+    except (FeedbackError, KeyError) as exc:
+        print(f"[ERROR] {exc}")
+        return
+    label = f", corrected label: {row['corrected_label']}" if row["corrected_label"] else ""
+    print(f"[OK] Feedback saved (rating {row['rating']}{label}).")
+
+
+def print_feedback_stats(stats) -> None:
+    if not stats["total"]:
+        print("[INFO] No feedback yet.")
+        return
+    print(f"[FEEDBACK] {stats['total']} rating(s): {stats['up']} up, {stats['down']} down "
+          f"(approval {stats['approval_rate']:.0%})")
+    for route, entry in stats["by_route"].items():
+        print(f"  {route:<12} {entry['n']:>3} rated, approval {entry['approval_rate']:.0%}")
+    agreement = stats["judge_agreement"]
+    if agreement["n"]:
+        print(f"  judge vs analyst agreement: {agreement['agreement_rate']:.0%} of {agreement['n']} judged answers")
+    for pair in stats["corrections"]["top_pairs"][:5]:
+        print(f"  correction: {pair['predicted']} -> {pair['corrected']} (x{pair['count']})")
+
+
 def print_judgement(judgement) -> None:
     """LLM-as-Judge scores under the answer."""
     if judgement["verdict"] == "error":
@@ -85,7 +142,7 @@ def main() -> int:
         print(f"[ERROR] Could not start the assistant: {exc}")
         return 1
 
-    state = {"trace": not args.no_trace, "judge": args.judge, "thread": Assistant.new_thread_id()}
+    state = {"trace": not args.no_trace, "judge": args.judge, "thread": Assistant.new_thread_id(), "turn": None}
 
     def answer(question: str) -> None:
         start = time.time()
@@ -111,6 +168,7 @@ def main() -> int:
         print(LINE)
         if result.get("judgement"):
             print_judgement(result["judgement"])
+        state["turn"] = result.get("turn_id")
         suffix = "  (answer the question above to continue)" if result["needs_follow_up"] else ""
         print(f"[{time.time() - start:.1f}s total]{suffix}")
 
@@ -125,6 +183,7 @@ def main() -> int:
     for example in EXAMPLES:
         print(f"  - {example}")
     print("\nCommands: new (start a new conversation), trace on|off, judge on|off, quit")
+    print("Feedback on the last answer: feedback up|down [comment], feedback correct <attack type>, feedback stats")
 
     while True:
         try:
@@ -149,6 +208,9 @@ def main() -> int:
         if lower.startswith("judge "):
             state["judge"] = lower.endswith("on")
             print(f"[OK] LLM-as-Judge {'on' if state['judge'] else 'off'}")
+            continue
+        if lower == "feedback" or lower.startswith("feedback "):
+            handle_feedback(assistant, state, question[len("feedback"):].strip())
             continue
         answer(question)
 

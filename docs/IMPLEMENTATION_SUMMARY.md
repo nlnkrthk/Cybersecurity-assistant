@@ -27,12 +27,13 @@ For setup and day-to-day usage, see the [README](../README.md).
 15. [Agent trace](#15-agent-trace)
 16. [LLM providers for the agents](#16-llm-providers-for-the-agents)
 17. [LLM-as-Judge](#17-llm-as-judge)
-18. [FastAPI backend](#18-fastapi-backend)
-19. [Automated tests](#19-automated-tests)
-20. [Verified build results](#20-verified-build-results)
-21. [Fix log](#21-fix-log)
-22. [Design decisions](#22-design-decisions)
-23. [Capstone requirement status](#23-capstone-requirement-status)
+18. [Feedback loop](#18-feedback-loop)
+19. [FastAPI backend](#19-fastapi-backend)
+20. [Automated tests](#20-automated-tests)
+21. [Verified build results](#21-verified-build-results)
+22. [Fix log](#22-fix-log)
+23. [Design decisions](#23-design-decisions)
+24. [Capstone requirement status](#24-capstone-requirement-status)
 
 ---
 
@@ -94,7 +95,7 @@ The project has these parts:
   needs. The agents call the ML, prioritization and retrieval tools; guardrails wrap the graph,
   and every step is recorded in an agent trace (§12–16).
 - **API** (`src/api`): a FastAPI backend that exposes the assistant and the tools over HTTP
-  (§18).
+  (§19).
 
 The ML service and RAG retrieval are **separate modules**. They are not one fixed pipeline: the
 supervisor decides per question which agents run, and each agent decides which tools to call.
@@ -127,6 +128,8 @@ checkout location.
 | `ATTACK_CLASSIFIER_FILE`, `INTRUSION_RISK_FILE`, `ANOMALY_DETECTOR_FILE` | The three model pickles, each with a `*_META_FILE` JSON (feature order, thresholds, metrics) |
 | `FEATURE_REFERENCE_FILE` | `feature_reference.json`: display names, units, BENIGN medians and 1,001 BENIGN quantiles per feature |
 | `ATTACK_PROFILES_FILE` | `attack_type_profiles.json`: SHAP-based traffic profile of each attack type |
+| `ML_MODEL_VERSIONS_DIR`, `ACTIVE_CLASSIFIER_POINTER` | Retrained classifier versions and the pointer to the active one (`ml/models/versions/`, git-ignored) |
+| `FEEDBACK_DB_FILE`, `CLEANED_FLOWS_FILE` | Feedback database; training table used for retraining |
 
 Runtime settings come from `.env` (never committed):
 
@@ -140,6 +143,7 @@ Runtime settings come from `.env` (never committed):
 | `LLM_REQUESTS_PER_MINUTE` | Optional client-side rate limit (e.g. 5 for the Gemini free tier) |
 | `JUDGE_PROVIDER`, `JUDGE_MODEL` | Optional separate model for LLM-as-Judge (default: the main LLM) |
 | `JUDGE_MODE` | `on` judges every assistant answer by default; `off` (default) only on request |
+| `FEEDBACK_DB_PATH` | Optional location of the feedback database (default `data/feedback/feedback.db`) |
 | `API_CORS_ORIGINS` | Allowed browser origins for the API (default: Streamlit on port 8501) |
 
 Sampling targets:
@@ -183,7 +187,7 @@ lives in `src/data/`. Logs go to the console and `data/logs/data_prep_<timestamp
 2. **Cast numerics.** All feature and port columns are cast to `double`.
 3. **Infinity → null.** `±inf` in any numeric column (common in `Flow Packets/s`) becomes null.
 4. **Standardize labels.** Labels are trimmed and the Web Attack separator is repaired (see
-   [fix 1](#21-fix-log)); then `LABEL_STANDARDIZATION` is applied.
+   [fix 1](#22-fix-log)); then `LABEL_STANDARDIZATION` is applied.
 5. **Deduplicate.** A SHA-256 hash over 11 flow-identity fields (IPs, ports, protocol, duration,
    packet and byte counts, label; nulls encoded as `__NULL__`) is built, and duplicates are
    dropped by hash. This avoids a full-row comparison over ~90 columns.
@@ -411,12 +415,15 @@ Recommended Investigation, Recommended Response, and Confidence / Limitations.
 | `scripts/search/interactive_hybrid_search.py` | Retrieval explorer, no LLM | Shows BM25, vector and RRF lists; stale or misaligned indexes are refused |
 | `scripts/evaluation/evaluate_hybrid_search.py` | Retrieval metrics | 12 labelled queries; Hit@K, Precision@K and MRR per method; optional `--output` report |
 | `scripts/ml/interactive_ml.py` | Query the ML service directly | Metrics are extracted from a sentence by the LLM, or by a rule-based parser with `--no-llm`; shows the extracted metrics, then attack type, risk, anomaly, SHAP reasons and priority. Commands: `incident <ID>`, `example <type>`, `profile <type>`, `types`, `mode explain\|predict`, `json on\|off`, `reset`. A follow-up answer is merged with the metrics already given |
-| `scripts/agents/interactive_assistant.py` | Chat with the multi-agent assistant | Prints the live agent trace (guardrails, route, agents, tools, timings), then the answer. Conversation memory per session; commands `new`, `trace on\|off`, `judge on\|off`, `quit`; `--no-trace`, `--judge`; a question as argument answers once and exits |
+| `scripts/agents/interactive_assistant.py` | Chat with the multi-agent assistant | Prints the live agent trace (guardrails, route, agents, tools, timings), then the answer. Conversation memory per session; commands `new`, `trace on\|off`, `judge on\|off`, `feedback up\|down\|correct\|stats`, `quit`; `--no-trace`, `--judge`; a question as argument answers once and exits |
 | `scripts/evaluation/judge_answers.py` | LLM-as-Judge evaluation | `--calibrate` checks the judge on answers with known flaws; default runs a 15-question set with the judge on (`--limit`, `--route`) and writes a JSONL report |
+| `scripts/feedback/feedback_report.py` | Feedback summary | Approval, judge vs analyst agreement, corrections, comments; `--list`, `--json` |
+| `scripts/feedback/export_corrections.py` | Corrections CSV | 24 features + corrected label for retraining |
+| `scripts/feedback/retrain_classifier.py` | Retrain the classifier with corrections | `--dry-run`; saves a version and activates it only if test macro F1 does not drop; `--list`, `--activate` |
 | `scripts/api/run_api.py` | Start the FastAPI backend | Uvicorn on `127.0.0.1:8000` by default; `--port`, `--host`, `--reload`, `--log-level`; Swagger UI at `/docs` |
 
 The indexing and evaluation scripts disable Chroma telemetry by default. They no longer force
-Hugging Face offline mode (see [fix 7](#21-fix-log)); set `HF_HUB_OFFLINE=1` yourself once the
+Hugging Face offline mode (see [fix 7](#22-fix-log)); set `HF_HUB_OFFLINE=1` yourself once the
 model is cached.
 
 ---
@@ -1038,13 +1045,75 @@ After both fixes, the affected routes were rerun: classify 4/4 pass (the flow qu
 `classify` and answered with tools), general 2/2 pass, all criteria 5.00. Timing: 12–150 s per
 question including the judge (about 5 s per judgement); investigations are the slowest.
 
-## 18. FastAPI backend
+## 18. Feedback loop
+
+Analysts rate answers (👍/👎, optional comment, optional **corrected attack label**). Feedback is
+stored with a snapshot of the turn and flows back in three ways:
+
+```
+answer ──▶ analyst feedback ──▶ SQLite store ──▶ ① stats (approval, judge vs analyst, common mistakes)
+                                     ├──────────▶ ② immediate: corrections shown in later answers
+                                     └──────────▶ ③ retraining: corrected flows → new classifier version,
+                                                    activated only if test macro F1 does not drop
+```
+
+### 18.1 Capture (`src/feedback/`)
+
+- **Turn IDs.** Every turn gets a `turn_id` (set by the input guard, returned with every answer).
+  Feedback names a `thread_id` and optionally a `turn_id` (default: the latest turn).
+  `Assistant.turn_state()` finds that turn in the checkpointer history.
+- **Snapshot from the conversation, not the client** (`snapshot.py`): question (already redacted by
+  the input guard), answer, route, agents, the single-flow prediction and confidence, incident ID and
+  historical label, flow arguments, input quality, judge verdict and score, `provider:model`. A client
+  can't attach feedback to an answer that was never given.
+- **Validation** (`service.py`): a corrected label is matched to one of the 15 attack types
+  (case-insensitive) and is only accepted when the turn analysed a flow or incident.
+- **Store** (`store.py`): SQLite at `data/feedback/feedback.db` (git-ignored; `FEEDBACK_DB_PATH`
+  overrides it). One row per turn (`UNIQUE(thread_id, turn_id)`); rating again updates the row.
+  Thread-safe; indexes on incident and date.
+
+### 18.2 Use
+
+| Use | How |
+|---|---|
+| ① Stats (`store.stats()`) | Approval rate overall and per route; **judge vs analyst agreement** (2×2: judge pass / not pass × analyst up / down, plus agreement rate); top prediction → correction pairs; recent comments |
+| ② Immediate | `lookup_incident` and the flow tools add `analyst_feedback` (`corrected_labels` with counts and a note) for incidents with corrections. The agent and final-answer prompts report it as human feedback, separate from the model prediction and the historical label. A lookup never creates the database |
+| ③ Retraining (`retraining.py`) | `collect_corrections()` turns corrections into training rows: incidents use their stored features; flows only with **full** input quality; several corrections of the same flow use the majority label (ties skipped). `retrain_with_corrections()` reproduces `ml/attack_classifier.ipynb` exactly (dedupe, 80/20 stratified split, seed 42, Random Forest 100 trees, balanced): corrections replace or extend the **training split only**; corrected test rows are removed from the test set and both models are compared on the same remaining rows. `retrain_and_maybe_promote()` saves `ml/models/versions/attack_classifier_<version>.pkl` + meta and writes `versions/active.json` **only if macro F1 did not drop** |
+
+The ML service loads the classifier named by `versions/active.json` when its files exist, otherwise
+the original model (`/health` shows `classifier_version`). All versions are kept; `--activate
+original` rolls back. The risk model and anomaly detector are not retrained from feedback.
+
+### 18.3 Interfaces
+
+| Where | How |
+|---|---|
+| Chat script | `feedback up [comment]`, `feedback down [comment]`, `feedback correct <attack type>` (rates the last answer down with the correction), `feedback stats` |
+| API | `POST /feedback` (201; 404 unknown conversation/turn; 422 invalid label or no flow); `GET /feedback` (filters: rating, route, label, corrected_only, paging); `GET /feedback/stats`; `GET /feedback/export.csv` |
+| `scripts/feedback/feedback_report.py` | Terminal report (`--list N`, `--json`) |
+| `scripts/feedback/export_corrections.py` | Corrections CSV (24 features, label, source, votes) |
+| `scripts/feedback/retrain_classifier.py` | `--dry-run`, default (save + promote if not worse), `--list`, `--activate <version>\|original`, `--trees` |
+
+### 18.4 Live check (2026-10-10, gpt-oss-20b, throwaway database)
+
+1. "What attack is incident INC-004393?" → Infiltration; feedback `correct bot` stored as `Bot` with
+   the prediction, incident and turn.
+2. Same question in a new conversation: `lookup_incident` returned `analyst_feedback`, and the
+   answer said "Analyst feedback indicates a potential *Bot* label, which introduces some
+   uncertainty", keeping the model prediction (Infiltration) separate.
+3. Stats counted the Infiltration → Bot correction.
+4. Retraining dry run (9 s): the current model's test metrics reproduced the notebook exactly
+   (macro F1 0.8387); the new model learned the corrected flow (0% → 100% on it) but test macro F1
+   fell to 0.8277 (−0.011), because the deliberately wrong correction relabelled one of only ~36
+   Infiltration training rows, so `promote = False`. The guard did its job.
+
+## 19. FastAPI backend
 
 `src/api/` exposes the assistant and the tools over HTTP. Start it with
 `python scripts/api/run_api.py` and open `http://127.0.0.1:8000/docs` (Swagger UI with an
 example request on every endpoint).
 
-### 18.1 Endpoints
+### 19.1 Endpoints
 
 | Method & path | Uses LLM | Purpose |
 |---|---|---|
@@ -1059,13 +1128,14 @@ example request on every endpoint).
 | `GET /incidents/{id}` | no | Stored metrics, historical label, port |
 | `GET /attack-types`, `GET /attack-types/{name}` | no | List with severity; one attack type's profile |
 | `POST /judge` | yes | LLM-as-Judge for a conversation's latest answer (`thread_id`) or any question + answer (§17) |
-| `POST /feedback` | no | Placeholder (501) until the feedback loop is built |
-| `GET /health` | no | ML models loaded, number of attack types, assistant ready (or why not), `provider:model`, search-index state, package versions |
+| `POST /feedback` | no | Rate a turn (`thread_id`, optional `turn_id`, `rating`, `comment`, `corrected_label`) (§18) |
+| `GET /feedback`, `GET /feedback/stats`, `GET /feedback/export.csv` | no | List feedback, statistics, corrections CSV for retraining |
+| `GET /health` | no | ML models loaded, number of attack types, active classifier version, assistant ready (or why not), `provider:model`, search-index state, package versions |
 
 The direct endpoints call the same functions as the agent tools, so the API and the chat always
 agree.
 
-### 18.2 Behaviour
+### 19.2 Behaviour
 
 - **Status codes:**
 
@@ -1096,19 +1166,19 @@ agree.
   constraints.
 - Conversations live in memory and are lost on restart.
 
-### 18.3 Files
+### 19.3 Files
 
 | File | Contents |
 |---|---|
 | `src/api/main.py` | `create_app(assistant=None, load_search_index=True)`, lifespan, CORS, request-ID middleware, 500 handler; module-level `app` |
 | `src/api/schemas.py` | Request and response models (flow inputs reuse the tools' `FlowArgs`) |
 | `src/api/deps.py` | `AppState` (assistant, ML service, index state, per-thread locks), `tool_response()` (tool error → HTTP code) |
-| `src/api/routes/chat.py`, `judge.py`, `ml.py`, `search.py`, `system.py` | The endpoints |
+| `src/api/routes/chat.py`, `judge.py`, `feedback.py`, `ml.py`, `search.py`, `system.py` | The endpoints |
 | `scripts/api/run_api.py` | Uvicorn launcher |
 
 ---
 
-## 19. Automated tests
+## 20. Automated tests
 
 `tests/` uses pytest (`conftest.py` adds `src/` to the path and provides shared fixtures: the
 cleaned flows, one flow per class, a full flow and the ML service). Run with
@@ -1120,22 +1190,23 @@ cleaned flows, one flow per class, a full flow and the ML service). Run with
 | `test_ml_service.py` | 17 | Predictions on real flows, partial input, explanations, filled features excluded from reasons, batches |
 | `test_prioritization.py` | 21 | Score bands, each override, batch ordering, follow-up handling |
 | `test_agent_tools.py` | 23 | Every tool, error handling, retrieval-only search, attack-type matching |
-| `test_agents.py` | 30 | Routing, agent order, tool loop and budget, follow-ups across turns, memory, refusal and parse fallbacks, trace events and formatting |
+| `test_agents.py` | 32 | Routing, agent order, tool loop and budget, follow-ups across turns, memory, refusal and parse fallbacks, trace events and formatting |
 | `test_guardrails.py` | 70 | Blocked, allowed and redacted inputs; every output check; plausibility errors; guard nodes in the graph |
 | `test_api.py` | 40 | Every endpoint, status codes, SSE stream, threads and history, CSV upload, CORS, request IDs, LLM-provider errors |
 | `test_llm_config.py` | 13 | Provider selection, defaults, missing keys, rate limiter, `LLMClient` following `LLM_PROVIDER` |
 | `test_judge.py` | 42 | Verdict rules, applicable criteria, judge input and trimming, JSON parsing and fallback, provider errors, rule caps, graph node (on request, `JUDGE_MODE`, skipped turns, failures), `judge_last_turn`, `/chat` and `/judge` endpoints |
-| **Total** | **302** | All passing (about 1–2 minutes) |
+| `test_feedback.py` | 21 | Store (upsert, filters, corrections, stats and judge agreement), snapshots, recording real turns and earlier turns, label validation, `analyst_feedback` in tools, API endpoints and CSV export, correction collection (majority, ties, skipped flows), retraining comparison and promotion guard (synthetic data), active-version pointer, `activate`/`list_versions` |
+| **Total** | **325** | All passing (about 1–2 minutes) |
 
 Graph and API tests use a scripted **fake LLM** (separate queues for router decisions, agent
 replies and final answers). Tests are fast, free, repeatable and need no API key, and they can
 force cases a real model rarely produces (refusals, unparsable routes, empty replies, endless
 tool calls). The ML models, tools, guardrails and search indexes in the tests are real. Real-model
-behaviour is checked with live runs (§20).
+behaviour is checked with live runs (§21).
 
 ---
 
-## 20. Verified build results
+## 21. Verified build results
 
 Built on 2026-10-09: Windows 11, Python 3.10.11, Java 22, PySpark 4.2.0, chromadb 1.5.9,
 sentence-transformers 6.1.0, anthropic 1.12.1, 16-core CPU, no GPU.
@@ -1159,7 +1230,7 @@ volume on port 80?"*
 - The answer separated the evidence into two distinct flow patterns, cited incident IDs, and
   correctly said that per-flow data cannot confirm distributed behaviour.
 
-### 20.1 Assistant, services and API (2026-10-09 / 10)
+### 21.1 Assistant, services and API (2026-10-09 / 10)
 
 Environment additions: scikit-learn 1.7.2, numpy 2.2.6, shap 0.48.0, langgraph 1.2.14,
 langchain-core 1.6.9, langchain-anthropic 1.7.5, langchain-google-genai 4.4.0,
@@ -1195,9 +1266,9 @@ message answered in 6 ms; `/chat/stream` delivered `trace` then `result` events;
 upload ranked an incident (P2) and a new flow (P4); unknown incident → 404; `/chat` with an
 exhausted provider account → 502 with the provider's message.
 
-**Test suite:** 302 tests pass (§19).
+**Test suite:** 325 tests pass (§20).
 
-### 20.2 Known limitations
+### 21.2 Known limitations
 
 - An investigation makes about 10 sequential LLM calls (≈ 1–3 minutes depending on the provider
   and rate limits), and some lookups are repeated by more than one agent.
@@ -1212,7 +1283,7 @@ exhausted provider account → 502 with the provider's message.
 
 ---
 
-## 21. Fix log
+## 22. Fix log
 
 Bugs found and fixed during review and the first full build:
 
@@ -1257,10 +1328,11 @@ Bugs found and fixed while building the ML, services, agents and API:
 | 32 | `judge.py` | The small judge model passed an invented incident ID and an answer missing the partial-input caveat in 2 of 3 runs | REQUIRED CAVEATS in the judge input + deterministic rule caps (6/6 calibration cases in both runs) |
 | 33 | `graph.py` (router) | Found by the judge evaluation: the router's `json_schema` call ran away to the token limit on "Classify this flow: …", fell back to `general`, and the answer was written without any tools (judge: fail, 2.5/5) | Router uses a plain JSON request first (parsed and validated), structured output only as a fallback |
 | 34 | `judge.py` | General-knowledge answers ("DoS vs DDoS?") failed because the rubric demanded evidence that the `general` route never collects | For `general`, faithfulness/correctness score the accuracy of the general knowledge; claims about a specific flow without evidence stay unsupported |
+| 35 | `feedback/__init__.py` | A store injected by a test was silently replaced because its path differed from `FEEDBACK_DB_PATH`, so tests shared one database | `set_feedback_store()` pins the store |
 
 ---
 
-## 22. Design decisions
+## 23. Design decisions
 
 1. **Spark for 2.8M rows, Pandas for ~97k.** Loading, cleaning, deduplication and sampling run in
    Spark; only the sample is converted to Pandas for ID assignment and text generation. Peak Pandas
@@ -1308,10 +1380,13 @@ Bugs found and fixed while building the ML, services, agents and API:
 19. **Judge with rules and a model together.** The LLM judges semantics; facts that rules can
     verify (IDs, figures, priority, commands, caveats) cap its scores, so a lenient or small judge
     model can't pass them.
+20. **Feedback can't make the model worse.** Corrections only enter the training split, the
+    comparison uses identical test rows, and a retrained classifier is activated only if macro F1
+    does not drop; every version is kept for rollback.
 
 ---
 
-## 23. Capstone requirement status
+## 24. Capstone requirement status
 
 Against `project_guidelines/Project 8 - AI-Powered Cybersecurity Incident Response Assistant.pdf`:
 
@@ -1326,7 +1401,7 @@ Against `project_guidelines/Project 8 - AI-Powered Cybersecurity Incident Respon
 | Investigation and response recommendations | ✅ Response agent and final answer (§13) |
 | Input validation guardrails | ✅ Input guard (injection, harmful requests, redaction), flow plausibility checks, output guard (§14) |
 | Incident prioritization | ✅ P1–P4 scoring with overrides (§11); single and batch tools; API batch and CSV endpoints |
-| API endpoints | ✅ FastAPI backend (§18) |
+| API endpoints | ✅ FastAPI backend (§19) |
 
 ### Requirement 2: Advanced
 
@@ -1338,15 +1413,13 @@ Against `project_guidelines/Project 8 - AI-Powered Cybersecurity Incident Respon
 | Multi-agent investigation workflow | ✅ LangGraph supervisor + 4 agents, conversation memory, follow-ups, agent trace (§13, §15) |
 | Anomaly / suspicious-traffic risk prediction | ✅ §8.5 |
 | Explainable feature analysis | ✅ SHAP per prediction and per attack type (§9, §10.2) |
-| Feedback loop | ❌ Not started (`/feedback` placeholder exists) |
+| Feedback loop | ✅ Ratings and label corrections (chat, API), stats with judge-vs-analyst agreement, corrections shown in later answers, guarded classifier retraining with versioning (§18) |
 | Front end | ❌ Not started (Streamlit planned on top of the API) |
 
 ### Next steps
 
-1. Feedback loop: store ratings and corrected labels behind `/feedback`; export corrections for
-   retraining.
-2. Streamlit front end: chat with a live trace panel, result cards, SHAP chart, similar incidents,
+1. Streamlit front end: chat with a live trace panel, result cards, SHAP chart, similar incidents,
    feedback buttons, CSV prioritization.
-3. DeepEval: a labelled question set with RAG metrics, routing and classification accuracy, and
+2. DeepEval: a labelled question set with RAG metrics, routing and classification accuracy, and
    judge scores.
-4. Documentation and deliverables.
+3. Documentation and deliverables.

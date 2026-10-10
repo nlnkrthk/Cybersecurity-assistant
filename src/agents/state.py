@@ -52,6 +52,9 @@ class AssistantState(TypedDict, total=False):
     # Guardrail results for the current turn: {"input": {...}, "output": {...}} (see agents.guardrails).
     guardrails: Dict[str, Any]
 
+    # Unique ID of the current turn (feedback refers to it).
+    turn_id: str
+
     # LLM-as-Judge for the current turn (see agents.judge): requested by the caller, and its result.
     judge_requested: bool
     judgement: Optional[Dict[str, Any]]

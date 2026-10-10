@@ -28,6 +28,7 @@ import sklearn
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
+    ACTIVE_CLASSIFIER_POINTER,
     ANOMALY_DETECTOR_FILE,
     ANOMALY_DETECTOR_META_FILE,
     ATTACK_CLASSIFIER_FILE,
@@ -57,6 +58,25 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def active_classifier_files():
+    """(model file, meta file, version) of the classifier to serve.
+
+    A retrained version promoted by the feedback loop (ml/models/versions/active.json) wins;
+    otherwise the original model trained in ml/attack_classifier.ipynb is used.
+    """
+    if ACTIVE_CLASSIFIER_POINTER.exists():
+        try:
+            pointer = json.loads(ACTIVE_CLASSIFIER_POINTER.read_text(encoding="utf-8"))
+            model_file = ACTIVE_CLASSIFIER_POINTER.parent / pointer["model_file"]
+            meta_file = ACTIVE_CLASSIFIER_POINTER.parent / pointer["meta_file"]
+            if model_file.exists() and meta_file.exists():
+                return model_file, meta_file, pointer["version"]
+            logger.warning(f"Active classifier files missing ({pointer}); using the original model")
+        except (OSError, ValueError, KeyError) as exc:
+            logger.warning(f"Unreadable {ACTIVE_CLASSIFIER_POINTER} ({exc}); using the original model")
+    return ATTACK_CLASSIFIER_FILE, ATTACK_CLASSIFIER_META_FILE, "original"
+
+
 def _load_model(path: Path):
     if not path.exists():
         raise FileNotFoundError(f"Required ML model not found: {path}")
@@ -74,11 +94,12 @@ class MLService:
 
     def __init__(self) -> None:
         logger.info("Loading ML models")
-        self.classifier = _load_model(ATTACK_CLASSIFIER_FILE)
+        classifier_file, classifier_meta_file, self.classifier_version = active_classifier_files()
+        self.classifier = _load_model(classifier_file)
         self.risk_model = _load_model(INTRUSION_RISK_FILE)
         self.anomaly_model = _load_model(ANOMALY_DETECTOR_FILE)
 
-        self.classifier_meta = _read_json(ATTACK_CLASSIFIER_META_FILE)
+        self.classifier_meta = _read_json(classifier_meta_file)
         self.risk_meta = _read_json(INTRUSION_RISK_META_FILE)
         self.anomaly_meta = _read_json(ANOMALY_DETECTOR_META_FILE)
         self.attack_profiles = _read_json(ATTACK_PROFILES_FILE)

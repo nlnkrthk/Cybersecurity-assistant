@@ -127,3 +127,7 @@ data/processed/*
 
 # Evaluation outputs (generated)
 data/evaluation/
+
+# Analyst feedback and retrained model versions (generated)
+data/feedback/
+ml/models/versions/
