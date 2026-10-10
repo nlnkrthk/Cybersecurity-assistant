@@ -108,6 +108,30 @@ def test_snapshot_from_explain_evidence():
     assert has_flow(s)
 
 
+def _copied_metrics_state(args):
+    lookup = {"status": "ok", "incident_id": "INC-000035", "historical_label": "SSH-Patator",
+              "metrics": {"Flow duration": 13903754.0, "Forward packets": 21.0, "Backward packets": 32.0}}
+    return {"final_answer": "SSH-Patator.", "route": "investigate", "evidence": [
+        {"tool": "lookup_incident", "args": {"incident_id": "INC-000035"}, "result": lookup},
+        {"tool": "classify_attack_type", "args": args, "result": {
+            "status": "ok", "attack_type": {"prediction": "SSH-Patator", "confidence": 1.0},
+            "input": {"input_quality": "full"}}},
+    ]}
+
+
+def test_snapshot_links_incident_when_agent_passes_its_metrics():
+    # Seen live: the agent looked the incident up, then classified it with the copied metrics.
+    s = build_snapshot(_copied_metrics_state(
+        {"flow_duration": 13903754.0, "total_fwd_packets": 21.0, "total_bwd_packets": 32.0}), "investigate")
+    assert (s["incident_id"], s["historical_label"], s["predicted_label"]) == ("INC-000035", "SSH-Patator", "SSH-Patator")
+
+
+def test_snapshot_does_not_link_incident_for_different_metrics():
+    for args in ({"flow_duration": 5.0, "total_fwd_packets": 21.0}, {"flow_duration": "2 s"}):
+        s = build_snapshot(_copied_metrics_state(args), "investigate")
+        assert s["incident_id"] is None and s["predicted_label"] == "SSH-Patator"
+
+
 def test_snapshot_without_flow():
     s = build_snapshot({"final_answer": "DoS vs DDoS ...", "route": "general"}, "difference?")
     assert s["predicted_label"] is None and not has_flow(s)

@@ -21,6 +21,9 @@ uvicorn[standard]>=0.30
 python-multipart>=0.0.9
 langchain-google-genai>=4.0
 langchain-openai>=1.0
+streamlit>=1.50
+plotly>=5.24
+httpx>=0.27
 
 # Optional:
 #   openai      - only when LLM_BASE_URL points at an OpenAI-compatible/OpenRouter endpoint

@@ -29,11 +29,12 @@ For setup and day-to-day usage, see the [README](../README.md).
 17. [LLM-as-Judge](#17-llm-as-judge)
 18. [Feedback loop](#18-feedback-loop)
 19. [FastAPI backend](#19-fastapi-backend)
-20. [Automated tests](#20-automated-tests)
-21. [Verified build results](#21-verified-build-results)
-22. [Fix log](#22-fix-log)
-23. [Design decisions](#23-design-decisions)
-24. [Capstone requirement status](#24-capstone-requirement-status)
+20. [Streamlit front end](#20-streamlit-front-end)
+21. [Automated tests](#21-automated-tests)
+22. [Verified build results](#22-verified-build-results)
+23. [Fix log](#23-fix-log)
+24. [Design decisions](#24-design-decisions)
+25. [Capstone requirement status](#25-capstone-requirement-status)
 
 ---
 
@@ -56,7 +57,7 @@ For setup and day-to-day usage, see the [README](../README.md).
 The data, retrieval and model-training tracks above feed the assistant layers below:
 
 ```
-                  Streamlit UI (planned) / curl / DeepEval (planned)
+                  Streamlit UI (frontend/) / curl / DeepEval (planned)
                                      │ HTTP (JSON, Server-Sent Events)
                                      ▼
  ┌───────────────────────────────────────────────────────────────────────────────┐
@@ -96,6 +97,7 @@ The project has these parts:
   and every step is recorded in an agent trace (§12–16).
 - **API** (`src/api`): a FastAPI backend that exposes the assistant and the tools over HTTP
   (§19).
+- **Front end** (`frontend/`): a Streamlit app for analysts that talks only to the API (§20).
 
 The ML service and RAG retrieval are **separate modules**. They are not one fixed pipeline: the
 supervisor decides per question which agents run, and each agent decides which tools to call.
@@ -187,7 +189,7 @@ lives in `src/data/`. Logs go to the console and `data/logs/data_prep_<timestamp
 2. **Cast numerics.** All feature and port columns are cast to `double`.
 3. **Infinity → null.** `±inf` in any numeric column (common in `Flow Packets/s`) becomes null.
 4. **Standardize labels.** Labels are trimmed and the Web Attack separator is repaired (see
-   [fix 1](#22-fix-log)); then `LABEL_STANDARDIZATION` is applied.
+   [fix 1](#23-fix-log)); then `LABEL_STANDARDIZATION` is applied.
 5. **Deduplicate.** A SHA-256 hash over 11 flow-identity fields (IPs, ports, protocol, duration,
    packet and byte counts, label; nulls encoded as `__NULL__`) is built, and duplicates are
    dropped by hash. This avoids a full-row comparison over ~90 columns.
@@ -421,9 +423,10 @@ Recommended Investigation, Recommended Response, and Confidence / Limitations.
 | `scripts/feedback/export_corrections.py` | Corrections CSV | 24 features + corrected label for retraining |
 | `scripts/feedback/retrain_classifier.py` | Retrain the classifier with corrections | `--dry-run`; saves a version and activates it only if test macro F1 does not drop; `--list`, `--activate` |
 | `scripts/api/run_api.py` | Start the FastAPI backend | Uvicorn on `127.0.0.1:8000` by default; `--port`, `--host`, `--reload`, `--log-level`; Swagger UI at `/docs` |
+| `scripts/frontend/run_frontend.py` | Start the Streamlit front end | `localhost:8501`; `--port`, `--address`, `--api` (§20) |
 
 The indexing and evaluation scripts disable Chroma telemetry by default. They no longer force
-Hugging Face offline mode (see [fix 7](#22-fix-log)); set `HF_HUB_OFFLINE=1` yourself once the
+Hugging Face offline mode (see [fix 7](#23-fix-log)); set `HF_HUB_OFFLINE=1` yourself once the
 model is cached.
 
 ---
@@ -1178,7 +1181,53 @@ agree.
 
 ---
 
-## 20. Automated tests
+## 20. Streamlit front end
+
+`frontend/` is a thin client: every page calls the FastAPI backend over HTTP through
+`api_client.py`. No agent, ML or retrieval code runs in the Streamlit process, so the API stays the
+single microservice and the front end holds no secrets (`API_BASE_URL` is its only setting).
+
+```
+Streamlit (localhost:8501) ──HTTP / SSE──▶ FastAPI (localhost:8000) ──▶ agents · ML · RAG · judge · feedback
+```
+
+### 20.1 Pages
+
+| Page | What it does | API |
+|---|---|---|
+| 💬 Assistant | Chat with live agent steps (guardrail, route, agents, tool results, judge) streamed into a status box; answer with route badge, guardrail notices (blocked, redacted, output fixes), judge card (verdict, five scores, reasons, unsupported claims), evidence and trace. 👍/👎 on every answer, plus a form for a comment and an attack-type correction (offered only when the turn analysed a flow or incident). Sidebar: new conversation, judge on/off, live steps on/off, earlier conversations | `/chat/stream` (falls back to `/chat`), `/chat/{id}/history`, `/feedback` |
+| 🔬 Flow analyzer | A historical incident (with one example per attack type) or the 24 metrics (numbers or unit strings; "fill from incident" to start from real values) → attack type, intrusion risk, anomaly and priority cards, rule overrides, input-quality warnings, historical-label mismatch, and SHAP bar charts for the attack type and for the risk | `/ml/explain`, `/incidents/{id}` |
+| 🔎 Incident search | Hybrid search with attack-type and port filters and numeric conditions in the query; shows the filters applied or inferred; pick a row to see its metrics and analyst corrections, then open it in the flow analyzer. Attack-type profiles: attack vs normal medians (log-scale chart) | `/search`, `/incidents/{id}`, `/attack-types`, `/attack-types/{name}` |
+| 🚨 Triage queue | Upload a CSV (sample download provided) or paste incident IDs → counts per priority, chart, colour-coded ranking with score bars, flows that need more data, CSV download | `/ml/prioritize/csv`, `/ml/prioritize/batch` |
+| ⚖️ Answer quality | Judge the latest answer of the conversation (with its real evidence) or any question and answer. Feedback dashboard: ratings, approval overall and per route, judge-vs-analyst matrix and agreement rate, top corrections, recent comments, filterable feedback table, corrections CSV for retraining | `/judge`, `/feedback/stats`, `/feedback`, `/feedback/export.csv` |
+| Sidebar (all pages) | API status, `provider:model`, search-index state, active classifier version; Retry/Refresh | `/health` |
+
+### 20.2 Files
+
+| File | Role |
+|---|---|
+| `frontend/app.py` | Entry point: page config, navigation (Investigate / Quality), status sidebar |
+| `frontend/api_client.py` | `ApiClient` (httpx): one method per endpoint, per-call timeouts (10 min for chat and judge), SSE parsing, `ApiError` with the status and a message for the UI (422 validation details, 404, 502 provider error, 503, unreachable API) |
+| `frontend/formatting.py` | Pure helpers (unit-tested): the 24 flow fields and groups, example incidents, trace-event lines, guardrail notices, badges, flow-input parsing, incident-ID parsing, SHAP and ranking rows |
+| `frontend/components.py` | Shared Streamlit pieces: cached client and health, status sidebar, judge card, evidence and trace, flow result card, SHAP chart, priority chart and table |
+| `frontend/views/*.py` | The five pages |
+| `scripts/frontend/run_frontend.py` | `streamlit run` on localhost:8501 (headless, usage statistics off); `--port`, `--address`, `--api` |
+
+Search filters: the API offers attack type and destination port (plus numeric conditions in the
+query). The retrieval layer also supports protocol, IP and timestamp filters, but this dataset
+release has no values for them (§22.3), so the page says so instead of showing empty filters.
+
+### 20.3 Running it
+
+```
+.venv/Scripts/python scripts/api/run_api.py            # terminal 1: API on :8000
+.venv/Scripts/python scripts/frontend/run_frontend.py  # terminal 2: http://localhost:8501
+```
+
+`--api http://host:port` (or `API_BASE_URL`) points the front end at another API. The API's CORS
+setting is not needed: Streamlit calls the API from its server process, not from the browser.
+
+## 21. Automated tests
 
 `tests/` uses pytest (`conftest.py` adds `src/` to the path and provides shared fixtures: the
 cleaned flows, one flow per class, a full flow and the ML service). Run with
@@ -1195,18 +1244,19 @@ cleaned flows, one flow per class, a full flow and the ML service). Run with
 | `test_api.py` | 40 | Every endpoint, status codes, SSE stream, threads and history, CSV upload, CORS, request IDs, LLM-provider errors |
 | `test_llm_config.py` | 13 | Provider selection, defaults, missing keys, rate limiter, `LLMClient` following `LLM_PROVIDER` |
 | `test_judge.py` | 42 | Verdict rules, applicable criteria, judge input and trimming, JSON parsing and fallback, provider errors, rule caps, graph node (on request, `JUDGE_MODE`, skipped turns, failures), `judge_last_turn`, `/chat` and `/judge` endpoints |
-| `test_feedback.py` | 21 | Store (upsert, filters, corrections, stats and judge agreement), snapshots, recording real turns and earlier turns, label validation, `analyst_feedback` in tools, API endpoints and CSV export, correction collection (majority, ties, skipped flows), retraining comparison and promotion guard (synthetic data), active-version pointer, `activate`/`list_versions` |
-| **Total** | **325** | All passing (about 1–2 minutes) |
+| `test_feedback.py` | 23 | Store (upsert, filters, corrections, stats and judge agreement), snapshots (incl. an incident identified only by its copied metrics), recording real turns and earlier turns, label validation, `analyst_feedback` in tools, API endpoints and CSV export, correction collection (majority, ties, skipped flows), retraining comparison and promotion guard (synthetic data), active-version pointer, `activate`/`list_versions` |
+| `test_frontend.py` | 24 | API client against the real app (health, explain, follow-up, 404/422, batch and CSV ranking, chat stream → feedback → stats → export → history → delete, stream error event, unreachable API), SSE parsing, error messages, flow fields = model features, example incidents carry their labels, formatting helpers, every page rendered with Streamlit's `AppTest` while the API is down |
+| **Total** | **351** | All passing (about 1–2 minutes) |
 
 Graph and API tests use a scripted **fake LLM** (separate queues for router decisions, agent
 replies and final answers). Tests are fast, free, repeatable and need no API key, and they can
 force cases a real model rarely produces (refusals, unparsable routes, empty replies, endless
 tool calls). The ML models, tools, guardrails and search indexes in the tests are real. Real-model
-behaviour is checked with live runs (§21).
+behaviour is checked with live runs (§22).
 
 ---
 
-## 21. Verified build results
+## 22. Verified build results
 
 Built on 2026-10-09: Windows 11, Python 3.10.11, Java 22, PySpark 4.2.0, chromadb 1.5.9,
 sentence-transformers 6.1.0, anthropic 1.12.1, 16-core CPU, no GPU.
@@ -1230,7 +1280,7 @@ volume on port 80?"*
 - The answer separated the evidence into two distinct flow patterns, cited incident IDs, and
   correctly said that per-flow data cannot confirm distributed behaviour.
 
-### 21.1 Assistant, services and API (2026-10-09 / 10)
+### 22.1 Assistant, services and API (2026-10-09 / 10)
 
 Environment additions: scikit-learn 1.7.2, numpy 2.2.6, shap 0.48.0, langgraph 1.2.14,
 langchain-core 1.6.9, langchain-anthropic 1.7.5, langchain-google-genai 4.4.0,
@@ -1266,9 +1316,28 @@ message answered in 6 ms; `/chat/stream` delivered `trace` then `result` events;
 upload ranked an incident (P2) and a new flow (P4); unknown incident → 404; `/chat` with an
 exhausted provider account → 502 with the provider's message.
 
-**Test suite:** 325 tests pass (§20).
+**Test suite:** 351 tests pass (§21).
 
-### 21.2 Known limitations
+### 22.2 Front end (2026-10-10, gpt-oss-20b via NVIDIA NIM)
+
+Run in the browser against a separate API instance with a throwaway feedback database:
+
+| Check | Result |
+|---|---|
+| Status sidebar | API ok, `nvidia:openai/gpt-oss-20b`, search index ready, classifier `original`; "Cannot reach the API" with a Retry button while the API was starting |
+| "Investigate INC-000035 and tell me how to respond" with the judge on | Live steps streamed (guardrail, route `investigate`, 4 agents, 7 tool calls); answer with route badge, evidence, trace; judge 5.0/5 pass with all five criteria shown. 404 s, because one NIM call hung until the 240 s timeout and was retried |
+| Feedback form on that answer | 👎 + comment + correction FTP-Patator → "Correction saved"; the row (prediction SSH-Patator, judge verdict pass) appeared in the dashboard: agreement matrix, top correction, comment |
+| Prompt injection | Blocked in 0.0 s, guardrail notice, no feedback buttons |
+| Flow analyzer | INC-002545 → Heartbleed, risk 100%, anomaly High, P1 "Investigate now"; DDoS example → P2; SHAP charts for the attack type and the risk |
+| Incident search | "more than 10000 packets per second" + port 80 → 5 results from 239 candidates, numeric condition shown; row → metrics → "Analyse in the flow analyzer" opened the analysis |
+| Triage queue | 8 sample incidents ranked (P1 ×2, P2 ×4, P3, P4), coloured priorities, score bars, CSV download |
+| Judge tab, any question and answer | An answer recommending `rm -rf /`, "hack back" and an invented incident → 1.0/5 fail, three unsupported claims listed |
+| "What traffic characteristics are typical of DDoS?" | First routed to `general` (generic answer without data); fixed (fix 36, 37): now `classify` → `get_attack_profile`, answer with attack vs normal medians, judge 5.0/5 |
+
+Router check on 8 questions (one per route, including both profile questions from the brief): 8/8
+on three runs with the new rules; the old rules sent the DDoS question to `general` (7/8).
+
+### 22.3 Known limitations
 
 - An investigation makes about 10 sequential LLM calls (≈ 1–3 minutes depending on the provider
   and rate limits), and some lookups are repeated by more than one agent.
@@ -1279,11 +1348,12 @@ exhausted provider account → 502 with the provider's message.
 - The dataset release has no protocol, IP or timestamp values, so those filters have no data.
 - The risk model relies partly on `init_win_bytes_forward`, a dataset artifact (§9.3).
 - Free LLM tiers (Gemini 20 requests/day, NIM queueing) are too small for regular use or
-  evaluation runs.
+  evaluation runs. On NIM a single call sometimes hangs until the 240 s timeout before the retry
+  succeeds, which can stretch an investigation to several minutes (§22.2).
 
 ---
 
-## 22. Fix log
+## 23. Fix log
 
 Bugs found and fixed during review and the first full build:
 
@@ -1329,10 +1399,13 @@ Bugs found and fixed while building the ML, services, agents and API:
 | 33 | `graph.py` (router) | Found by the judge evaluation: the router's `json_schema` call ran away to the token limit on "Classify this flow: …", fell back to `general`, and the answer was written without any tools (judge: fail, 2.5/5) | Router uses a plain JSON request first (parsed and validated), structured output only as a fallback |
 | 34 | `judge.py` | General-knowledge answers ("DoS vs DDoS?") failed because the rubric demanded evidence that the `general` route never collects | For `general`, faithfulness/correctness score the accuracy of the general knowledge; claims about a specific flow without evidence stay unsupported |
 | 35 | `feedback/__init__.py` | A store injected by a test was silently replaced because its path differed from `FEEDBACK_DB_PATH`, so tests shared one database | `set_feedback_store()` pins the store |
+| 36 | `prompts.py` (router) | Found in the front end: "What traffic characteristics are typical of DDoS?" (an example question of the brief) went to `general` and got a textbook answer without data, because it resembled "what is a DDoS?" | Router rules: traffic characteristics / metrics / features of an attack type are `classify`; `general` is for definitions only. 8/8 on a route check (old rules 7/8) |
+| 37 | `prompts.py` (classification, final answer) | After fix 36 the profile was used, but the answer was written as a single-flow assessment ("a flow exhibiting…", "input quality") | Profile questions: the agent reports attack vs normal medians; the final answer describes the attack type's typical traffic and never "this flow". Judge 5.0/5 on DDoS and PortScan |
+| 38 | `feedback/snapshot.py` | Found in the front end: the agent looked up INC-000035, then classified it by passing the copied metrics, so the feedback row had no incident and the correction would not show in later answers about it | The incident is linked when exactly one incident was looked up and every metric value passed matches its stored metrics |
 
 ---
 
-## 23. Design decisions
+## 24. Design decisions
 
 1. **Spark for 2.8M rows, Pandas for ~97k.** Loading, cleaning, deduplication and sampling run in
    Spark; only the sample is converted to Pandas for ID assignment and text generation. Peak Pandas
@@ -1383,10 +1456,13 @@ Bugs found and fixed while building the ML, services, agents and API:
 20. **Feedback can't make the model worse.** Corrections only enter the training split, the
     comparison uses identical test rows, and a retrained classifier is activated only if macro F1
     does not drop; every version is kept for rollback.
+21. **Thin front end.** Streamlit calls only the API, so every feature has one implementation, the UI
+    can be replaced (or run on another machine) without touching the assistant, and no keys live in
+    the UI process.
 
 ---
 
-## 24. Capstone requirement status
+## 25. Capstone requirement status
 
 Against `project_guidelines/Project 8 - AI-Powered Cybersecurity Incident Response Assistant.pdf`:
 
@@ -1414,12 +1490,10 @@ Against `project_guidelines/Project 8 - AI-Powered Cybersecurity Incident Respon
 | Anomaly / suspicious-traffic risk prediction | ✅ §8.5 |
 | Explainable feature analysis | ✅ SHAP per prediction and per attack type (§9, §10.2) |
 | Feedback loop | ✅ Ratings and label corrections (chat, API), stats with judge-vs-analyst agreement, corrections shown in later answers, guarded classifier retraining with versioning (§18) |
-| Front end | ❌ Not started (Streamlit planned on top of the API) |
+| Front end | ✅ Streamlit app on top of the API: assistant chat with live trace, judge and feedback; flow analyzer with SHAP charts; incident search and profiles; triage queue; answer-quality dashboard (§20) |
 
 ### Next steps
 
-1. Streamlit front end: chat with a live trace panel, result cards, SHAP chart, similar incidents,
-   feedback buttons, CSV prioritization.
-2. DeepEval: a labelled question set with RAG metrics, routing and classification accuracy, and
+1. DeepEval: a labelled question set with RAG metrics, routing and classification accuracy, and
    judge scores.
-3. Documentation and deliverables.
+2. Documentation and deliverables (README, architecture diagram, design, presentation).

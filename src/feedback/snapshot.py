@@ -9,6 +9,27 @@ from typing import Any, Dict, List, Optional
 PREDICTION_TOOLS = ("explain_flow", "classify_attack_type", "prioritize_flow")
 
 
+def _looked_up_incident(evidence: List[Dict[str, Any]], args: Dict[str, Any]) -> Dict[str, Any]:
+    """The incident a prediction was made for when the agent passed its metrics instead of its ID:
+    exactly one incident was looked up and every metric value passed matches its stored metrics."""
+    lookups = {
+        (item.get("result") or {}).get("incident_id"): item["result"]
+        for item in evidence
+        if item.get("tool") == "lookup_incident" and (item.get("result") or {}).get("status") == "ok"
+    }
+    values = [v for k, v in args.items() if k != "incident_id" and v is not None]
+    if len(lookups) != 1 or not values:
+        return {}
+    lookup = next(iter(lookups.values()))
+    stored = {round(float(v), 4) for v in (lookup.get("metrics") or {}).values() if isinstance(v, (int, float))}
+    try:
+        if all(round(float(v), 4) in stored for v in values):
+            return {"incident_id": lookup.get("incident_id"), "historical_label": lookup.get("historical_label")}
+    except (TypeError, ValueError):  # unit strings such as "2 s": not copied from the lookup
+        pass
+    return {}
+
+
 def _single_flow_prediction(evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Prediction details of the flow analysed this turn (None values if no single flow)."""
     found: Dict[str, Any] = {"predicted_label": None, "prediction_confidence": None, "incident_id": None,
@@ -19,7 +40,7 @@ def _single_flow_prediction(evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
             if item.get("tool") != tool or result.get("status") != "ok":
                 continue
             attack = result.get("attack_type") or {}
-            incident = result.get("incident") or {}
+            incident = result.get("incident") or _looked_up_incident(evidence, item.get("args") or {})
             found.update({
                 "predicted_label": attack.get("prediction"),
                 "prediction_confidence": attack.get("confidence"),
