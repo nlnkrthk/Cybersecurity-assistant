@@ -36,9 +36,13 @@ class ChatRequest(BaseModel):
         pattern=THREAD_ID_PATTERN,
         description="Conversation ID from an earlier response. Omit to start a new conversation.",
     )
+    judge: Optional[bool] = Field(
+        default=None,
+        description="Grade the answer with LLM-as-Judge (one extra LLM call). Omit to use JUDGE_MODE from .env.",
+    )
 
     model_config = ConfigDict(json_schema_extra={"examples": [
-        {"message": "Investigate incident INC-000035 and tell me how to respond"},
+        {"message": "Investigate incident INC-000035 and tell me how to respond", "judge": True},
         {"message": "What about its risk?", "thread_id": "3f2a9c..."},
     ]})
 
@@ -54,6 +58,9 @@ class ChatResponse(BaseModel):
     evidence: List[Dict[str, Any]] = Field(default=[], description="Every tool call this turn: agent, tool, args, result.")
     trace: List[Dict[str, Any]] = Field(default=[], description="Guardrail, route, agent, tool and final-answer events.")
     guardrails: Dict[str, Any] = {}
+    judgement: Optional[Dict[str, Any]] = Field(
+        default=None, description="LLM-as-Judge result when requested: verdict, overall, scores, reasons, unsupported claims."
+    )
     elapsed_ms: int
 
 
@@ -97,6 +104,43 @@ class SearchRequest(BaseModel):
         {"query": "SSH brute force with many short connections", "dst_port": 22},
         {"query": "flows with more than 10000 packets per second", "attack_type": "DDoS", "top_k": 10},
     ]})
+
+
+# ============================================================================
+# Judge
+# ============================================================================
+class JudgeRequest(BaseModel):
+    """Either a thread_id (grade that conversation's latest answer) or a question and answer."""
+
+    thread_id: Optional[str] = Field(default=None, pattern=THREAD_ID_PATTERN)
+    question: Optional[str] = Field(default=None, max_length=MAX_INPUT_CHARS)
+    answer: Optional[str] = Field(default=None, max_length=20000)
+    route: Optional[str] = Field(default=None, description="Route of the answer (actionability is scored for recommend / investigate).")
+    findings: Dict[str, str] = Field(default_factory=dict, description="Agent findings the answer was written from.")
+    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Tool calls: agent, tool, args, result.")
+
+    model_config = ConfigDict(json_schema_extra={"examples": [
+        {"thread_id": "3f2a9c..."},
+        {
+            "question": "What attack is INC-004393?",
+            "answer": "INC-004393 is Infiltration (90% confidence), priority P1.",
+            "route": "classify",
+            "evidence": [{"agent": "classification", "tool": "classify_attack_type",
+                          "args": {"incident_id": "INC-004393"},
+                          "result": {"status": "ok", "attack_type": {"prediction": "Infiltration", "confidence": 0.9}}}],
+        },
+    ]})
+
+
+class JudgeResponse(BaseModel):
+    verdict: Literal["pass", "needs_review", "fail", "error"]
+    overall: Optional[float] = None
+    scores: Dict[str, int] = {}
+    reasons: Dict[str, str] = {}
+    applicable: List[str] = []
+    unsupported_claims: List[str] = []
+    error: Optional[str] = None
+    judge_model: Optional[str] = None
 
 
 # ============================================================================

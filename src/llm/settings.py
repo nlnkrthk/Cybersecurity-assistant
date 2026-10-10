@@ -9,6 +9,9 @@ LLM provider settings shared by the whole project, read from .env:
     LLM_REASONING_EFFORT=low   thinking effort for reasoning models (default low)
     LLM_REQUESTS_PER_MINUTE=35 optional client-side rate limit for the agents
 
+    JUDGE_PROVIDER / JUDGE_MODEL   optional separate model for LLM-as-Judge (default: the main LLM)
+    JUDGE_MODE=off | on            judge every assistant answer by default (default off)
+
 Used by the agents (agents.llm) and by llm.client.LLMClient (standalone RAG answers,
 metric extraction), so one setting switches the provider everywhere. Without
 LLM_PROVIDER the provider is inferred from which API key is set.
@@ -74,17 +77,13 @@ def requests_per_minute() -> Optional[float]:
     return rpm if rpm > 0 else None
 
 
-def llm_settings() -> Dict[str, Any]:
-    """Resolved provider settings. Includes the key under "api_key"; use public_settings() to show them."""
-    provider = configured_provider()
-    if provider is None:
-        provider = next((p for p in ("anthropic", "nvidia", "google") if first_env(API_KEY_VARS[p])), "nvidia")
+def _settings_for(provider: str, model: Optional[str]) -> Dict[str, Any]:
     base_url = None
     if provider in DEFAULT_BASE_URLS:
         base_url = (os.getenv(BASE_URL_VARS[provider]) or DEFAULT_BASE_URLS[provider]).strip()
     return {
         "provider": provider,
-        "model": (os.getenv("LLM_MODEL") or DEFAULT_MODELS[provider]).strip(),
+        "model": (model or DEFAULT_MODELS[provider]).strip(),
         "api_key": first_env(API_KEY_VARS[provider]),
         "base_url": base_url,
         "reasoning_effort": (os.getenv("LLM_REASONING_EFFORT") or "low").strip().lower(),
@@ -92,8 +91,41 @@ def llm_settings() -> Dict[str, Any]:
     }
 
 
-def public_settings() -> Dict[str, Any]:
+def llm_settings() -> Dict[str, Any]:
+    """Resolved provider settings. Includes the key under "api_key"; use public_settings() to show them."""
+    provider = configured_provider()
+    if provider is None:
+        provider = next((p for p in ("anthropic", "nvidia", "google") if first_env(API_KEY_VARS[p])), "nvidia")
+    return _settings_for(provider, os.getenv("LLM_MODEL"))
+
+
+JUDGE_MODES = ("off", "on")
+
+
+def judge_mode() -> str:
+    """JUDGE_MODE: "on" judges every answer by default, "off" only when a request asks for it."""
+    mode = (os.getenv("JUDGE_MODE") or "off").strip().lower()
+    if mode not in JUDGE_MODES:
+        raise RuntimeError(f"JUDGE_MODE must be one of {', '.join(JUDGE_MODES)}, got {mode!r}")
+    return mode
+
+
+def judge_settings() -> Dict[str, Any]:
+    """Settings of the LLM-as-Judge model.
+
+    JUDGE_PROVIDER / JUDGE_MODEL pick a different model than the assistant (recommended: a model
+    grading its own answers tends to be lenient). Unset, the judge uses the main LLM settings.
+    """
+    main = llm_settings()
+    provider = (os.getenv("JUDGE_PROVIDER") or "").strip().lower() or main["provider"]
+    if provider not in PROVIDERS:
+        raise RuntimeError(f"Unknown JUDGE_PROVIDER {provider!r}; use one of {', '.join(PROVIDERS)}.")
+    model = os.getenv("JUDGE_MODEL") or (main["model"] if provider == main["provider"] else None)
+    return _settings_for(provider, model)
+
+
+def public_settings(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Settings safe to log or return from an API (no key)."""
-    settings = llm_settings()
+    settings = dict(settings if settings is not None else llm_settings())
     key = settings.pop("api_key")
     return {**settings, "api_key_set": bool(key)}

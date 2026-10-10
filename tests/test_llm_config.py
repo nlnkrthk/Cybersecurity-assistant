@@ -16,9 +16,9 @@ ENV_VARS = (
 def clean_env(monkeypatch):
     for name in ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    llm_module.get_chat_model.cache_clear()
+    llm_module.clear_model_cache()
     yield monkeypatch
-    llm_module.get_chat_model.cache_clear()
+    llm_module.clear_model_cache()
 
 
 @pytest.mark.parametrize("provider, key_var, cls, model", [

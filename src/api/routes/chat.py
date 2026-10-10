@@ -54,7 +54,7 @@ def chat(body: ChatRequest, assistant=Depends(get_assistant), state: AppState = 
     started = time.perf_counter()
     with state.thread_lock(thread_id):
         try:
-            result = assistant.ask(body.message, thread_id)
+            result = assistant.ask(body.message, thread_id, judge=body.judge)
         except Exception as exc:
             if is_llm_provider_error(exc):
                 raise HTTPException(502, llm_error_detail(exc))
@@ -85,7 +85,7 @@ def chat_stream(body: ChatRequest, assistant=Depends(get_assistant), state: AppS
         started = time.perf_counter()
         with state.thread_lock(thread_id):
             try:
-                for kind, payload in assistant.stream(body.message, thread_id):
+                for kind, payload in assistant.stream(body.message, thread_id, judge=body.judge):
                     if kind == "event":
                         yield _sse("trace", payload)
                     else:

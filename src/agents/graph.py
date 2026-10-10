@@ -1,25 +1,31 @@
 """
 Supervisor graph of the incident-response assistant.
 
-    START -> input_guard -> supervisor -> [agents in route order] -> final_answer -> output_guard -> END
+    START -> input_guard -> supervisor -> [agents in route order] -> final_answer -> output_guard -> [judge] -> END
                   |                               +-> ask_follow_up -> output_guard  (key metrics missing)
                   +-> END  (blocked: prompt injection or harmful request; fixed reply)
+
+The judge node (LLM-as-Judge) runs only when the caller asks for it (judge=True or JUDGE_MODE=on)
+and the turn produced a real answer (not blocked, out of scope or a follow-up question).
 
 The supervisor picks a route for the latest user message; each route maps to an
 ordered list of agents (agents.state.ROUTE_PLANS). Agents write findings into the
 shared state; the final answer node turns all findings into one reply. Conversations
 are kept per thread_id by the checkpointer, so a follow-up answer resumes the analysis.
 """
+import json
 import logging
+import re
 import uuid
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from agents.guardrails import BLOCKED_MESSAGE_PLACEHOLDER, check_input, check_output
+from agents.judge import judge_answer, last_question, should_judge
 from agents.prompts import FINAL_ANSWER_PROMPT, ROUTER_PROMPT
 from agents.specialists import AGENT_TITLES, format_history, make_agent_node
 from agents.trace import emit, now_ms
@@ -55,7 +61,7 @@ def input_guard(state: AssistantState) -> Dict[str, Any]:
     trace: List[Dict[str, Any]] = []  # first node of the turn: start a fresh trace
     message = state["messages"][-1]
     check = check_input(message.text)
-    update: Dict[str, Any] = {"trace": trace, "guardrails": {"input": check.to_dict()}}
+    update: Dict[str, Any] = {"trace": trace, "guardrails": {"input": check.to_dict()}, "judgement": None}
 
     if check.blocked:
         # Keep the blocked text out of the history that later prompts include.
@@ -100,29 +106,97 @@ def output_guard(state: AssistantState) -> Dict[str, Any]:
     }
 
 
-def route_message(router, messages) -> RouteDecision:
-    """Ask the router model for a route; never raises.
+def after_output_guard(state: AssistantState) -> str:
+    wanted = state.get("judge_requested") and should_judge(state.get("route"), bool(state.get("follow_up")))
+    return "judge" if wanted else END
 
-    A model refusal (e.g. a request to write malware) becomes out_of_scope; any other
-    failure to produce a valid decision falls back to general.
-    """
+
+def make_judge_node(get_judge_llm):
+    def judge(state: AssistantState) -> Dict[str, Any]:
+        started = now_ms()
+        trace = list(state.get("trace", []))
+        result = judge_answer(
+            get_judge_llm(),
+            question=last_question(state.get("messages", [])),
+            answer=state.get("final_answer", ""),
+            route=state.get("route"),
+            findings=state.get("findings") or {},
+            evidence=state.get("evidence") or [],
+            guard_issues=(state.get("guardrails") or {}).get("output", {}).get("issues"),
+        )
+        emit(trace, {
+            "type": "judge",
+            "verdict": result["verdict"],
+            "overall": result["overall"],
+            "scores": {c: result["scores"][c] for c in result["applicable"]},
+            "unsupported_claims": len(result["unsupported_claims"]),
+            "error": result.get("error"),
+            "elapsed_ms": round(now_ms() - started),
+        })
+        return {"judgement": result, "trace": trace}
+
+    return judge
+
+
+ROUTER_JSON_FORMAT = (
+    '\n\nReply with ONLY a JSON object: {"route": "<classify|risk|search|recommend|investigate|general|'
+    'out_of_scope>", "reason": "<one short sentence>"}'
+)
+
+
+def _is_refusal(message) -> bool:
+    metadata = getattr(message, "response_metadata", None) or {}
+    return metadata.get("stop_reason") == "refusal" or metadata.get("finish_reason") == "content_filter"
+
+
+def _parse_route(message) -> Optional[RouteDecision]:
+    match = re.search(r"\{.*\}", getattr(message, "text", "") or "", flags=re.DOTALL)
+    if not match:
+        return None
     try:
-        out = router.invoke(messages)
+        return RouteDecision.model_validate(json.loads(match.group(0)))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+
+
+def route_message(llm, messages) -> RouteDecision:
+    """Ask the model for a route; never raises.
+
+    1) A plain request with JSON instructions, parsed here: works the same on every provider
+       (guided json_schema decoding sometimes ran away to the token limit on gpt-oss).
+    2) If that reply is not a valid decision, structured output (json_schema; forced tool
+       calling is not supported for structured output on current Claude models).
+
+    A model refusal (e.g. a request to write malware) becomes out_of_scope; any other failure
+    falls back to general.
+    """
+    system, *rest = messages
+    try:
+        reply = llm.invoke([SystemMessage(system.content + ROUTER_JSON_FORMAT), *rest])
     except Exception as exc:
         logger.warning(f"Router call failed ({exc}); falling back to 'general'")
         return RouteDecision(route="general", reason="Router unavailable; answered as a general question.")
+    if _is_refusal(reply):
+        return RouteDecision(route="out_of_scope", reason="The model declined the request.")
+    decision = _parse_route(reply)
+    if decision is not None:
+        return decision
+
+    try:
+        out = llm.with_structured_output(RouteDecision, method="json_schema", include_raw=True).invoke(messages)
+    except Exception as exc:
+        logger.warning(f"Router fallback failed ({exc}); falling back to 'general'")
+        return RouteDecision(route="general", reason="Could not determine a route; answered as a general question.")
     if out.get("parsed") is not None:
         return out["parsed"]
-    raw = out.get("raw")
-    if raw is not None and raw.response_metadata.get("stop_reason") == "refusal":
+    if out.get("raw") is not None and _is_refusal(out["raw"]):
         return RouteDecision(route="out_of_scope", reason="The model declined the request.")
     logger.warning(f"Router returned no valid decision ({out.get('parsing_error')}); falling back to 'general'")
     return RouteDecision(route="general", reason="Could not determine a route; answered as a general question.")
 
 
 def make_supervisor(llm):
-    # json_schema: forced tool calling is not supported for structured output on current Claude models.
-    router = llm.with_structured_output(RouteDecision, method="json_schema", include_raw=True)
+    router = llm
 
     def supervisor(state: AssistantState) -> Dict[str, Any]:
         messages = state["messages"]
@@ -234,12 +308,31 @@ def next_step(state: AssistantState) -> str:
 # ============================================================================
 # Graph
 # ============================================================================
-def build_assistant(llm=None, checkpointer=None):
-    """Compile the assistant graph. Pass a chat model to override the default Claude model."""
+def build_assistant(llm=None, checkpointer=None, judge_llm=None):
+    """Compile the assistant graph.
+
+    Args:
+        llm: chat model for the supervisor, agents and final answer (default: from .env).
+        checkpointer: conversation store (default: in memory).
+        judge_llm: model for LLM-as-Judge. Default: llm when one is given, else the judge
+            model from .env (JUDGE_PROVIDER / JUDGE_MODEL), created only when first needed.
+    """
     if llm is None:
         from agents.llm import get_chat_model
 
         llm = get_chat_model()
+        default_judge = None
+    else:
+        default_judge = llm
+
+    def get_judge_llm():
+        if judge_llm is not None:
+            return judge_llm
+        if default_judge is not None:
+            return default_judge
+        from agents.llm import get_judge_model
+
+        return get_judge_model()
 
     graph = StateGraph(AssistantState)
     graph.add_node("input_guard", input_guard)
@@ -249,6 +342,7 @@ def build_assistant(llm=None, checkpointer=None):
     graph.add_node("final_answer", make_final_answer(llm))
     graph.add_node("ask_follow_up", ask_follow_up)
     graph.add_node("output_guard", output_guard)
+    graph.add_node("judge", make_judge_node(get_judge_llm))
 
     targets = [*AGENTS, "final_answer", "ask_follow_up"]
     graph.add_edge(START, "input_guard")
@@ -258,7 +352,8 @@ def build_assistant(llm=None, checkpointer=None):
         graph.add_conditional_edges(agent, next_step, targets)
     graph.add_edge("final_answer", "output_guard")
     graph.add_edge("ask_follow_up", "output_guard")
-    graph.add_edge("output_guard", END)
+    graph.add_conditional_edges("output_guard", after_output_guard, ["judge", END])
+    graph.add_edge("judge", END)
 
     return graph.compile(checkpointer=checkpointer if checkpointer is not None else InMemorySaver())
 
@@ -266,28 +361,41 @@ def build_assistant(llm=None, checkpointer=None):
 class Assistant:
     """Convenience wrapper: ask questions in a conversation identified by thread_id."""
 
-    def __init__(self, llm=None, checkpointer=None):
-        self.graph = build_assistant(llm=llm, checkpointer=checkpointer)
+    def __init__(self, llm=None, checkpointer=None, judge_llm=None):
+        self.graph = build_assistant(llm=llm, checkpointer=checkpointer, judge_llm=judge_llm)
+        self._llm, self._judge_llm = llm, judge_llm
 
     @staticmethod
     def new_thread_id() -> str:
         return uuid.uuid4().hex
 
     @staticmethod
-    def _prepare(message: str, thread_id: Optional[str]) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    def _prepare(
+        message: str, thread_id: Optional[str], judge: Optional[bool] = None
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
         if not message or not message.strip():
             raise ValueError("Message must be a non-empty string")
         thread_id = thread_id or Assistant.new_thread_id()
-        return {"messages": [HumanMessage(message.strip())]}, {"configurable": {"thread_id": thread_id}}, thread_id
+        if judge is None:
+            from llm.settings import judge_mode
 
-    def ask(self, message: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
-        """Answer one message; the result includes the full agent trace."""
-        inputs, config, thread_id = self._prepare(message, thread_id)
+            judge = judge_mode() == "on"
+        inputs = {"messages": [HumanMessage(message.strip())], "judge_requested": bool(judge)}
+        return inputs, {"configurable": {"thread_id": thread_id}}, thread_id
+
+    def ask(self, message: str, thread_id: Optional[str] = None, judge: Optional[bool] = None) -> Dict[str, Any]:
+        """Answer one message; the result includes the full agent trace.
+
+        judge: grade the answer with LLM-as-Judge (None = JUDGE_MODE from .env).
+        """
+        inputs, config, thread_id = self._prepare(message, thread_id, judge)
         return self._result(self.graph.invoke(inputs, config=config), thread_id)
 
-    def stream(self, message: str, thread_id: Optional[str] = None) -> Iterator[Tuple[str, Dict[str, Any]]]:
+    def stream(
+        self, message: str, thread_id: Optional[str] = None, judge: Optional[bool] = None
+    ) -> Iterator[Tuple[str, Dict[str, Any]]]:
         """Answer one message, yielding ("event", trace_event) live and finally ("result", result)."""
-        inputs, config, thread_id = self._prepare(message, thread_id)
+        inputs, config, thread_id = self._prepare(message, thread_id, judge)
         state: Dict[str, Any] = {}
         for mode, chunk in self.graph.stream(inputs, config=config, stream_mode=["custom", "values"]):
             if mode == "custom":
@@ -310,4 +418,32 @@ class Assistant:
             "flow_args": state.get("flow_args"),
             "trace": state.get("trace", []),
             "guardrails": state.get("guardrails", {}),
+            "judgement": state.get("judgement"),
         }
+
+    def judge_llm(self):
+        """The model used for LLM-as-Judge (see build_assistant)."""
+        if self._judge_llm is not None:
+            return self._judge_llm
+        if self._llm is not None:
+            return self._llm
+        from agents.llm import get_judge_model
+
+        return get_judge_model()
+
+    def judge_last_turn(self, thread_id: str) -> Dict[str, Any]:
+        """Grade the latest answer of a conversation (also when it was not judged at the time)."""
+        state = self.graph.get_state({"configurable": {"thread_id": thread_id}}).values
+        if not state.get("messages"):
+            raise KeyError(f"Conversation {thread_id} not found")
+        if not should_judge(state.get("route"), bool(state.get("follow_up"))):
+            raise ValueError(f"The last turn (route {state.get('route')!r}) has no answer to judge.")
+        return judge_answer(
+            self.judge_llm(),
+            question=last_question(state["messages"]),
+            answer=state.get("final_answer", ""),
+            route=state.get("route"),
+            findings=state.get("findings") or {},
+            evidence=state.get("evidence") or [],
+            guard_issues=(state.get("guardrails") or {}).get("output", {}).get("issues"),
+        )

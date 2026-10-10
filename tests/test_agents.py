@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from agents.graph import OUT_OF_SCOPE_REPLY, Assistant, RouteDecision, next_step
+from agents.prompts import ROUTER_PROMPT
 from agents.specialists import MAX_TOOL_ROUNDS, build_task
 
 
@@ -19,7 +20,7 @@ class FakeLLM:
         self.final_replies = deque(final_replies)  # str
         self.router_inputs, self.agent_inputs, self.final_inputs = [], [], []
 
-    # router: llm.with_structured_output(RouteDecision, method=..., include_raw=True)
+    # router fallback: llm.with_structured_output(RouteDecision, method=..., include_raw=True)
     def with_structured_output(self, schema, **kwargs):
         fake = self
 
@@ -38,6 +39,18 @@ class FakeLLM:
 
         return Router()
 
+    def _route_reply(self, messages):
+        """Router's first attempt: a plain request that must return route JSON."""
+        self.router_inputs.append(messages)
+        item = self.routes.popleft()
+        if isinstance(item, Exception):
+            raise item
+        if item == "refusal":
+            return AIMessage("", response_metadata={"stop_reason": "refusal"})
+        if item == "garbage":
+            return AIMessage("not json")  # the router then tries structured output (next queue item)
+        return AIMessage(item.model_dump_json())
+
     # specialists: llm.bind_tools(tools).invoke(messages)
     def bind_tools(self, tools):
         fake = self
@@ -49,8 +62,10 @@ class FakeLLM:
 
         return Bound()
 
-    # final answer: llm.invoke(messages)
+    # router (plain JSON request) and final answer: llm.invoke(messages)
     def invoke(self, messages):
+        if messages and messages[0].content.startswith(ROUTER_PROMPT):
+            return self._route_reply(messages)
         self.final_inputs.append(messages)
         return AIMessage(self.final_replies.popleft())
 
@@ -175,6 +190,19 @@ def test_router_failures_never_crash(router_output, expected):
     llm = FakeLLM(routes=[router_output], final_replies=["ok"])
     result = Assistant(llm=llm).ask("something")
     assert result["route"] == expected
+
+
+def test_router_falls_back_to_structured_output_when_plain_reply_is_invalid():
+    llm = FakeLLM(routes=["garbage", route("search")], agent_replies=[text("nothing found")], final_replies=["ok"])
+    result = Assistant(llm=llm).ask("has this happened before?")
+    assert result["route"] == "search"
+    assert len(llm.router_inputs) == 2  # plain attempt, then structured output
+
+
+def test_router_plain_request_asks_for_json():
+    llm = FakeLLM(routes=[route("general")], final_replies=["ok"])
+    Assistant(llm=llm).ask("hi")
+    assert '"route"' in llm.router_inputs[0][0].content
 
 
 # ---------------------------------------------------------------- robustness

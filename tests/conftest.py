@@ -2,11 +2,16 @@
 Shared pytest setup: puts src/ on the import path (same as the scripts) and
 provides real CIC-IDS2017 flows for tests.
 """
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
+
+# Tests decide per call whether to judge; a JUDGE_MODE=on in .env must not change them
+# (set before .env is loaded, which never overrides existing variables).
+os.environ["JUDGE_MODE"] = "off"
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))

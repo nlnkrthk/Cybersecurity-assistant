@@ -124,3 +124,6 @@ data/processed/*
 !data/logs/.gitkeep
 !data/processed/
 !data/processed/.gitkeep
+
+# Evaluation outputs (generated)
+data/evaluation/

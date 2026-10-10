@@ -11,7 +11,8 @@ While a question is answered, the agent trace is printed live: the supervisor's
 route, each agent that runs, every tool it calls with a one-line result, and timings.
 
 The conversation is remembered, so you can answer follow-up questions and refer
-back to earlier flows. Commands: new, trace on|off, quit.
+back to earlier flows. With --judge (or 'judge on') every answer is also graded by
+LLM-as-Judge. Commands: new, trace on|off, judge on|off, quit.
 """
 
 import argparse
@@ -51,6 +52,18 @@ EXAMPLES = [
 TRACE_HEADER = "-" * 34 + " agent trace " + "-" * 33
 
 
+def print_judgement(judgement) -> None:
+    """LLM-as-Judge scores under the answer."""
+    if judgement["verdict"] == "error":
+        print(f"[JUDGE] not scored: {judgement.get('error')}")
+        return
+    print(f"[JUDGE] {judgement['overall']:.1f}/5  verdict: {judgement['verdict'].upper()}")
+    for name in judgement["applicable"]:
+        print(f"  {name:<14} {judgement['scores'][name]}/5  {judgement['reasons'][name]}")
+    for claim in judgement["unsupported_claims"]:
+        print(f"  ! unsupported: {claim}")
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
@@ -62,6 +75,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Interactive multi-agent incident-response assistant.")
     parser.add_argument("query", nargs="?", help="Single question to answer without entering interactive mode.")
     parser.add_argument("--no-trace", action="store_true", help="Hide the live agent trace.")
+    parser.add_argument("--judge", action="store_true", help="Grade every answer with LLM-as-Judge (one extra LLM call).")
     args = parser.parse_args()
 
     print("Loading assistant (models load on first use)...")
@@ -71,7 +85,7 @@ def main() -> int:
         print(f"[ERROR] Could not start the assistant: {exc}")
         return 1
 
-    state = {"trace": not args.no_trace, "thread": Assistant.new_thread_id()}
+    state = {"trace": not args.no_trace, "judge": args.judge, "thread": Assistant.new_thread_id()}
 
     def answer(question: str) -> None:
         start = time.time()
@@ -79,7 +93,7 @@ def main() -> int:
         if state["trace"]:
             print(f"\n{TRACE_HEADER}")
         try:
-            for kind, payload in assistant.stream(question, state["thread"]):
+            for kind, payload in assistant.stream(question, state["thread"], judge=state["judge"]):
                 if kind == "result":
                     result = payload
                 elif state["trace"]:
@@ -95,6 +109,8 @@ def main() -> int:
         print(f"\n{LINE}")
         print(result["answer"])
         print(LINE)
+        if result.get("judgement"):
+            print_judgement(result["judgement"])
         suffix = "  (answer the question above to continue)" if result["needs_follow_up"] else ""
         print(f"[{time.time() - start:.1f}s total]{suffix}")
 
@@ -108,7 +124,7 @@ def main() -> int:
     print("Examples:")
     for example in EXAMPLES:
         print(f"  - {example}")
-    print("\nCommands: new (start a new conversation), trace on|off, quit")
+    print("\nCommands: new (start a new conversation), trace on|off, judge on|off, quit")
 
     while True:
         try:
@@ -129,6 +145,10 @@ def main() -> int:
         if lower.startswith("trace "):
             state["trace"] = lower.endswith("on")
             print(f"[OK] Agent trace {'on' if state['trace'] else 'off'}")
+            continue
+        if lower.startswith("judge "):
+            state["judge"] = lower.endswith("on")
+            print(f"[OK] LLM-as-Judge {'on' if state['judge'] else 'off'}")
             continue
         answer(question)
 

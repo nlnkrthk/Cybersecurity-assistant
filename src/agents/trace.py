@@ -15,6 +15,7 @@ Event types:
     follow_up     the turn ends with a question to the user
     final         the final answer node finished: elapsed_ms
     guard_output  output guardrail: issues found and fixed (empty list = passed)
+    judge         LLM-as-Judge: verdict, overall score, per-criterion scores, unsupported claims
 """
 import json
 import time
@@ -147,6 +148,13 @@ def format_event(event: Dict[str, Any]) -> Optional[str]:
         if event.get("truncated"):
             notes.append("message trimmed")
         return "[GUARD-IN]  allowed" + (" | " + " | ".join(notes) if notes else "")
+    if kind == "judge":
+        if event["verdict"] == "error":
+            return f"[JUDGE] not scored: {event.get('error')}{_secs(event)}"
+        scores = ", ".join(f"{name} {value}" for name, value in event["scores"].items())
+        claims = event.get("unsupported_claims") or 0
+        note = f" | {claims} unsupported claim(s)" if claims else ""
+        return f"[JUDGE] {event['overall']:.1f}/5 {event['verdict']} | {scores}{note}{_secs(event)}"
     if kind == "guard_output":
         issues = event.get("issues") or []
         if not issues:
