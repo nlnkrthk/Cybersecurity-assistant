@@ -142,7 +142,7 @@ def build_incident_text_column(df: DataFrame) -> DataFrame:
         logger.info(f"Generated incident_text for {len(pdf):,} incidents")
 
         # Convert back to Spark
-        df_with_text = df.spark.createDataFrame(pdf)
+        df_with_text = df.sparkSession.createDataFrame(pdf)
 
         return df_with_text
 

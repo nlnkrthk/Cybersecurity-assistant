@@ -384,7 +384,7 @@ print(text)
 
 ## Documentation
 
-- **Full Architecture:** See `DATA_PREP_ARCHITECTURE.md`
+- **Implementation details:** See `IMPLEMENTATION_SUMMARY.md`
 - **Implementation Details:** See `IMPLEMENTATION_SUMMARY.md`
 - **Config Reference:** See `src/config.py` (well-commented)
 

@@ -1,10 +1,13 @@
 pandas>=2.0.0
 numpy>=1.24.0
 pyarrow>=12.0.0
+pyspark>=3.4.0
 scikit-learn>=1.3.0
+joblib>=1.3.0
 sentence-transformers>=2.2.2
-chromadb>=0.3.21
+chromadb>=0.4.0
 rank-bm25>=0.2.2
+anthropic>=0.40.0
 python-dotenv>=1.0.0
 jupyter>=1.0.0
 matplotlib>=3.7.0
@@ -13,3 +16,12 @@ shap==0.48.0
 pytest>=8.0
 langgraph>=1.2
 langchain-anthropic>=1.7
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+langchain-google-genai>=4.0
+langchain-openai>=1.0
+
+# Optional:
+#   openai      - only when LLM_BASE_URL points at an OpenAI-compatible/OpenRouter endpoint
+#   truststore  - use the OS certificate store behind TLS-inspecting proxies

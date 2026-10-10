@@ -14,6 +14,11 @@ from retrieval.filters import filter_field_names, to_chroma_where
 
 logger = logging.getLogger(__name__)
 
+# Above this many candidate IDs, filter in Python rather than via a Chroma $in.
+MAX_WHERE_IN_IDS = 5000
+# Records fetched per get() call when validating index alignment.
+VALIDATION_PAGE_SIZE = 5000
+
 
 class ChromaVectorStore:
     """Vector store for incident embeddings using Chroma."""
@@ -156,16 +161,22 @@ class ChromaVectorStore:
             )
 
         where = to_chroma_where(filters)
+        allowed_ids: Optional[set] = None
         if candidate_ids is not None:
             normalized_candidate_ids = list(dict.fromkeys(map(str, candidate_ids)))
             if not normalized_candidate_ids:
                 return []
-            candidate_where = {"incident_id": {"$in": normalized_candidate_ids}}
-            where = (
-                {"$and": [where, candidate_where]}
-                if where
-                else candidate_where
-            )
+            if len(normalized_candidate_ids) <= MAX_WHERE_IN_IDS:
+                candidate_where = {"incident_id": {"$in": normalized_candidate_ids}}
+                where = (
+                    {"$and": [where, candidate_where]}
+                    if where
+                    else candidate_where
+                )
+            else:
+                # Very large $in lists can exceed SQLite's bound-variable limit;
+                # restrict in Python while widening the query instead.
+                allowed_ids = set(normalized_candidate_ids)
         stored_fields = (self.collection.metadata or {}).get("retrieval:metadata_fields")
         if filters and stored_fields is None:
             raise ValueError(
@@ -198,6 +209,7 @@ class ChromaVectorStore:
                 str(ids[i]): (str(ids[i]), float(distances[i]), documents[i])
                 for i in range(len(ids))
                 if documents[i] is not None
+                and (allowed_ids is None or str(ids[i]) in allowed_ids)
             })
             candidates = list(candidates_by_id.values())
             candidates.sort(key=lambda item: (item[1], item[0]))
@@ -248,9 +260,22 @@ class ChromaVectorStore:
         expected_texts = dict(zip(map(str, incident_ids), texts))
         if len(expected_texts) != len(incident_ids):
             raise ValueError("Expected source incident IDs to be unique")
-        records = self.collection.get(include=["documents", "metadatas"])
-        indexed_ids = records["ids"]
-        if set(indexed_ids) != set(expected_texts):
+        # Fetch in pages: a single get() over ~100k records exceeds SQLite's
+        # bound-variable limit ("too many SQL variables").
+        indexed_ids: List[str] = []
+        documents: List[Any] = []
+        metadatas: List[Any] = []
+        total = self.collection.count()
+        for offset in range(0, total, VALIDATION_PAGE_SIZE):
+            page = self.collection.get(
+                include=["documents", "metadatas"],
+                limit=VALIDATION_PAGE_SIZE,
+                offset=offset,
+            )
+            indexed_ids.extend(page["ids"])
+            documents.extend(page["documents"])
+            metadatas.extend(page["metadatas"])
+        if len(indexed_ids) != len(set(indexed_ids)) or set(indexed_ids) != set(expected_texts):
             raise ValueError("Chroma document IDs do not match source incident IDs")
 
         source_metadata = (
@@ -258,9 +283,7 @@ class ChromaVectorStore:
             if metadata_list is not None
             else None
         )
-        for incident_id, document, metadata in zip(
-            indexed_ids, records["documents"], records["metadatas"]
-        ):
+        for incident_id, document, metadata in zip(indexed_ids, documents, metadatas):
             if document != expected_texts[incident_id]:
                 raise ValueError(
                     f"Chroma document text does not match source for {incident_id}"

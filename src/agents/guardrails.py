@@ -23,6 +23,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from llm.text import normalize_model_text
+
 MAX_INPUT_CHARS = 4000
 
 BLOCKED_REPLIES = {
@@ -444,7 +446,7 @@ def check_output(
     evidence = evidence or []
     context = list(context_texts)
     issues: List[Dict[str, Any]] = []
-    text = answer or ""
+    text = normalize_model_text(answer or "")  # plain hyphens/spaces: printable on any console
 
     normalized = normalize_text(text)
     if any(fragment in normalized for fragment in _prompt_fragments()):

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, concat_ws, lit, sha2, when
+from pyspark.sql.functions import col, concat_ws, lit, regexp_replace, sha2, trim, when
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -104,9 +104,6 @@ def handle_invalid_numeric_values(df: DataFrame, numeric_cols: list) -> DataFram
 
     for col_name in numeric_cols:
         if col_name in df.columns:
-            # Count inf/NaN before
-            before_count = df.count()
-
             # Replace inf with null
             df = df.withColumn(
                 col_name,
@@ -135,6 +132,15 @@ def standardize_labels(df: DataFrame) -> DataFrame:
 
     if LABEL_COLUMN not in df.columns:
         raise ValueError(f"Label column '{LABEL_COLUMN}' not found")
+
+    # Raw Web Attack labels use a non-ASCII dash ("Web Attack \x96 XSS"), which
+    # Spark decodes as U+FFFD; without this they never match the mapping and the
+    # classes are silently dropped during sampling.
+    df = df.withColumn(LABEL_COLUMN, trim(col(LABEL_COLUMN)))
+    df = df.withColumn(
+        LABEL_COLUMN,
+        regexp_replace(col(LABEL_COLUMN), r"^Web Attack[^A-Za-z0-9]+", "Web Attack - "),
+    )
 
     # Apply label standardization mapping
     for raw_label, std_label in LABEL_STANDARDIZATION.items():

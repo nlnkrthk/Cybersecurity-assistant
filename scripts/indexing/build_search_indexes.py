@@ -8,9 +8,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
+# Set HF_HUB_OFFLINE=1 yourself once the embedding model is cached; forcing it
+# here would make the first run on a new machine fail to download the model.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
 
 project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root / "src"))

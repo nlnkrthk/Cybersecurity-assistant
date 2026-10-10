@@ -3,6 +3,7 @@ PySpark-based loader for CIC-IDS2017 CSV files.
 Loads all 8 raw CSV files and combines them into a single Spark DataFrame.
 """
 import logging
+import os
 from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
@@ -63,6 +64,11 @@ def create_spark_session(app_name: str = "APCIRA-DataPrep") -> SparkSession:
         Configured SparkSession.
     """
     logger.info(f"Creating Spark session: {app_name}")
+
+    # Make Spark's Python workers use this interpreter (e.g. the project venv)
+    # instead of whatever "python" happens to be first on PATH.
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
     spark = SparkSession.builder \
         .appName(app_name) \

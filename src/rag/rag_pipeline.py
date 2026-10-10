@@ -94,12 +94,28 @@ def _result_records(results: Mapping[str, Any], df: Optional[pd.DataFrame] = Non
     if not results:
         return []
 
+    candidate_ids: List[str] = []
+    seen = set()
+    result_keys = ("fused",) if results.get("fused") is not None else ("bm25", "vector")
+    for key in result_keys:
+        for item in results.get(key, []) or []:
+            incident_id = item[0] if len(item) >= 2 or (key == "vector" and len(item) >= 3) else None
+            if incident_id is None:
+                continue
+            incident_id = str(incident_id)
+            if incident_id not in seen:
+                seen.add(incident_id)
+                candidate_ids.append(incident_id)
+
+    # Only materialize rows for the returned incidents, not the whole dataset.
     records_by_id: Dict[str, Dict[str, Any]] = {}
-    if df is not None and not df.empty:
-        df_by_id = df.set_index("incident_id")
-        for incident_id in df_by_id.index:
-            row = df_by_id.loc[incident_id]
-            records_by_id[str(incident_id)] = _coerce_row_for_record(incident_id, row=row)
+    if df is not None and not df.empty and candidate_ids:
+        df_ids = df["incident_id"].astype(str)
+        for _, row in df.loc[df_ids.isin(seen)].iterrows():
+            incident_id = str(row["incident_id"])
+            records_by_id[incident_id] = _coerce_row_for_record(
+                incident_id, row=row.drop(labels=["incident_id"])
+            )
 
     metadata_records = results.get("metadata", []) or []
     if isinstance(metadata_records, Mapping):
@@ -120,19 +136,6 @@ def _result_records(results: Mapping[str, Any], df: Optional[pd.DataFrame] = Non
                 row=None,
                 metadata=metadata_record,
             )
-
-    candidate_ids: List[str] = []
-    seen = set()
-    result_keys = ("fused",) if results.get("fused") is not None else ("bm25", "vector")
-    for key in result_keys:
-        for item in results.get(key, []) or []:
-            incident_id = item[0] if len(item) >= 2 or (key == "vector" and len(item) >= 3) else None
-            if incident_id is None:
-                continue
-            incident_id = str(incident_id)
-            if incident_id not in seen:
-                seen.add(incident_id)
-                candidate_ids.append(incident_id)
 
     ranked_records: List[Dict[str, Any]] = []
     for incident_id in candidate_ids:

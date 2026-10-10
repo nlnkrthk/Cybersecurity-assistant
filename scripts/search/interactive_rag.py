@@ -15,7 +15,7 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root / "src"))
 
 from llm.client import LLMClient
-from rag.rag_pipeline import rag_pipeline
+from rag.rag_pipeline import _default_hybrid_searcher, rag_pipeline
 
 
 def parse_filter_args(filter_args):
@@ -46,6 +46,20 @@ def main() -> int:
 
     llm = LLMClient()
 
+    # Load the indexes and embedding model once rather than on every query.
+    print("Loading incident data, search indexes, and embedding model...")
+    try:
+        searcher, df = _default_hybrid_searcher()
+    except Exception as exc:
+        print(f"[ERROR] Could not load retrieval indexes: {exc}")
+        return 1
+
+    def run(query):
+        return rag_pipeline(
+            query, filters=filters, top_k=args.top_k,
+            searcher=searcher, df=df, llm_client=llm,
+        )
+
     def display_result(result):
         if args.debug:
             print("\n[HARD FILTER DEBUG]")
@@ -68,7 +82,7 @@ def main() -> int:
         print(result["answer"])
 
     if args.query:
-        result = rag_pipeline(args.query, filters=filters, top_k=args.top_k, llm_client=llm)
+        result = run(args.query)
         display_result(result)
         return 0
 
@@ -83,7 +97,7 @@ def main() -> int:
     while True:
         try:
             query = input("[QUERY] Enter your question or 'quit' to exit:\n> ").strip()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
             print("\n[EXIT] Goodbye!")
             return 0
         if query.lower() in {"quit", "exit", "q"}:
@@ -92,7 +106,11 @@ def main() -> int:
         if not query:
             print("[WARN] Please enter a question.")
             continue
-        result = rag_pipeline(query, filters=filters, top_k=args.top_k, llm_client=llm)
+        try:
+            result = run(query)
+        except ValueError as exc:
+            print(f"[ERROR] {exc}")
+            continue
         print("\n" + "=" * 80)
         display_result(result)
         print("=" * 80)

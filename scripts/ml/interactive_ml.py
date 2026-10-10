@@ -54,10 +54,16 @@ EXAMPLES = [
 # ============================================================================
 # Metric extraction
 # ============================================================================
+# The worked example matters for smaller models: without it, gpt-oss-20b often answered {}
+# even after reasoning out the right values.
 EXTRACTION_SYSTEM_PROMPT = """You extract network-flow metrics from a security analyst's message.
-Return ONLY a JSON object. Keys must be field names from the schema below; include a field ONLY if
-the message states its value explicitly. Never guess or invent values. Values may be numbers in the
-schema's unit or strings with a unit (e.g. "2 s", "1.5 KB", "43k"). Return {} if no metric is given.
+Reply with ONLY a JSON object that maps schema field names to the values stated in the message.
+Include every metric the message states explicitly; never guess or invent values. Values may be numbers
+in the schema's unit or strings with a unit (e.g. "2 s", "1.5 KB", "43k"). Use an empty object only
+when the message states no metric at all.
+
+Example: "it lasted 3 ms, 4 packets out and 2 back, 300 bytes sent" ->
+{"flow_duration": "3 ms", "total_fwd_packets": 4, "total_bwd_packets": 2, "total_len_fwd": "300 bytes"}
 
 Schema (field: description):
 """
@@ -70,7 +76,7 @@ def _schema_text() -> str:
 
 def extract_with_llm(llm, query: str) -> Dict[str, Any]:
     text = llm.generate(
-        f"Message:\n{query}\n\nReturn the JSON object now.",
+        f"Message:\n{query}",
         system_prompt=EXTRACTION_SYSTEM_PROMPT + _schema_text(),
         max_tokens=1000,
     )
@@ -324,6 +330,9 @@ def main() -> int:
             except Exception as exc:
                 print(f"[WARN] LLM extraction failed ({exc}); using the rule-based parser.")
                 metrics, source = extract_with_rules(query), "rules"
+            if not metrics:
+                # Smaller models occasionally return an empty object; the rules may still find metrics.
+                metrics, source = extract_with_rules(query), "rules (LLM found none)"
         else:
             metrics, source = extract_with_rules(query), "rules"
 

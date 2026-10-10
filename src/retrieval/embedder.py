@@ -27,7 +27,7 @@ class IncidentEmbedder:
         logger.info(f"Loading embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
         self.model_name = model_name
-        logger.info(f"Model loaded. Embedding dimension: {self.model.get_sentence_embedding_dimension()}")
+        logger.info(f"Model loaded. Embedding dimension: {self.get_embedding_dimension()}")
 
     def embed_texts(self, texts: List[str], batch_size: int = 128) -> np.ndarray:
         """
@@ -52,4 +52,6 @@ class IncidentEmbedder:
         Returns:
             Embedding dimension (e.g., 384 for all-MiniLM-L6-v2).
         """
-        return self.model.get_sentence_embedding_dimension()
+        # sentence-transformers 6 renamed the method; keep older versions working.
+        getter = getattr(self.model, "get_embedding_dimension", None) or self.model.get_sentence_embedding_dimension
+        return getter()
