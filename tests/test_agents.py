@@ -249,10 +249,13 @@ def test_trace_records_route_agents_tools_and_final():
     )
     trace = Assistant(llm=llm).ask("What attack is INC-004393?")["trace"]
 
-    assert [e["type"] for e in trace] == ["route", "agent_start", "tool_call", "tool_result", "agent_end", "final"]
-    assert trace[0]["route"] == "classify" and trace[0]["plan"] == ["classification"]
-    assert trace[3]["summary"] == "INC-004393: Infiltration (90%)"
-    assert trace[4]["llm_calls"] == 2 and trace[4]["tool_calls"] == 1 and trace[4]["outcome"] == "findings"
+    assert [e["type"] for e in trace] == [
+        "guard_input", "route", "agent_start", "tool_call", "tool_result", "agent_end", "final", "guard_output"
+    ]
+    assert trace[0]["action"] == "allowed"
+    assert trace[1]["route"] == "classify" and trace[1]["plan"] == ["classification"]
+    assert trace[4]["summary"] == "INC-004393: Infiltration (90%)"
+    assert trace[5]["llm_calls"] == 2 and trace[5]["tool_calls"] == 1 and trace[5]["outcome"] == "findings"
     assert all(e["elapsed_ms"] >= 0 for e in trace if "elapsed_ms" in e)
 
 
@@ -265,12 +268,13 @@ def test_trace_resets_each_turn_and_records_follow_up():
     assistant = Assistant(llm=llm)
     thread = assistant.new_thread_id()
     first = assistant.ask("suspicious? 5 us", thread)["trace"]
-    assert first[-2]["outcome"] == "follow_up"
-    assert first[-1]["type"] == "follow_up"
-    assert first[3]["summary"].startswith("needs follow-up")
+    assert first[-3]["outcome"] == "follow_up"
+    assert first[-2]["type"] == "follow_up"
+    assert first[-1]["type"] == "guard_output"
+    assert first[4]["summary"].startswith("needs follow-up")
 
     second = assistant.ask("hello", thread)["trace"]
-    assert [e["type"] for e in second] == ["route", "final"]
+    assert [e["type"] for e in second] == ["guard_input", "route", "final", "guard_output"]
 
 
 def test_stream_yields_live_events_then_result():
@@ -283,7 +287,9 @@ def test_stream_yields_live_events_then_result():
     kinds = [kind for kind, _ in items]
     assert kinds[-1] == "result" and kinds.count("result") == 1
     events = [payload["type"] for kind, payload in items if kind == "event"]
-    assert events == ["route", "agent_start", "tool_call", "tool_result", "agent_end", "final"]
+    assert events == [
+        "guard_input", "route", "agent_start", "tool_call", "tool_result", "agent_end", "final", "guard_output"
+    ]
     assert items[-1][1]["answer"] == "answer"
     assert [e["type"] for e in items[-1][1]["trace"]] == events
 

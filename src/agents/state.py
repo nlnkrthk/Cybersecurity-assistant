@@ -48,3 +48,6 @@ class AssistantState(TypedDict, total=False):
     pending_follow_up: Optional[Dict[str, Any]]  # previous turn's question and route, if any
 
     final_answer: str
+
+    # Guardrail results for the current turn: {"input": {...}, "output": {...}} (see agents.guardrails).
+    guardrails: Dict[str, Any]

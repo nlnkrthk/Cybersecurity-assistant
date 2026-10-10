@@ -4,7 +4,8 @@ Turns partial network-flow metrics into the 24-feature vector the ML models expe
 Users (or the LLM extracting metrics from a chat message) rarely provide all 24
 features, so this module:
   1. parses numbers and unit strings ("2 s", "1.5 KB", "43k") into model units,
-  2. validates values (finite, non-negative, flags 0/1) as an input guardrail,
+  2. validates values (finite, non-negative, flags 0/1, physically plausible) as an
+     input guardrail,
   3. derives features that can be computed from the ones given (rates, mean sizes),
   4. asks for a follow-up when key features are missing (duration, packets, bytes),
   5. otherwise fills the remaining gaps with BENIGN medians and flags them.
@@ -322,6 +323,35 @@ def _derive(known: Dict[str, float], warnings: List[str]) -> Dict[str, float]:
     return derived
 
 
+MAX_PACKET_BYTES = 65535                      # largest possible IP packet
+MAX_FLOW_DURATION_US = 7 * 24 * 3600 * 1e6    # one flow longer than a week is almost surely a unit error
+PACKET_SIZE_FEATURES = (
+    "fwd_packet_length_mean", "bwd_packet_length_mean", "min_packet_length", "max_packet_length",
+    "packet_length_mean",
+)
+
+
+def _check_plausibility(known: Dict[str, float]) -> None:
+    """Reject values that are physically impossible for one flow (likely typos or unit mistakes)."""
+    duration = known.get("flow_duration")
+    if duration is not None and duration > MAX_FLOW_DURATION_US:
+        raise FlowInputError(
+            f"flow_duration: {duration / 1e6 / 86400:,.1f} days is not plausible for a single flow "
+            "(limit 7 days); check the value and its unit"
+        )
+    for name in PACKET_SIZE_FEATURES:
+        if known.get(name, 0) > MAX_PACKET_BYTES:
+            raise FlowInputError(
+                f"{name}: {known[name]:,.0f} bytes is larger than the maximum packet size ({MAX_PACKET_BYTES:,} bytes)"
+            )
+    for packets, size in (("total_fwd_packets", "total_len_fwd"), ("total_bwd_packets", "total_len_bwd")):
+        if packets in known and size in known and known[size] > known[packets] * MAX_PACKET_BYTES:
+            raise FlowInputError(
+                f"{size}: {known[size]:,.0f} bytes cannot fit in {known[packets]:,.0f} packet(s) "
+                f"(at most {MAX_PACKET_BYTES:,} bytes each); check the byte and packet counts"
+            )
+
+
 def _consistency_warnings(known: Dict[str, float], warnings: List[str]) -> None:
     duration = known.get("flow_duration")
     fwd, bwd = known.get("total_fwd_packets"), known.get("total_bwd_packets")
@@ -386,6 +416,8 @@ def normalize_flow(data: FlowInput, *, lenient: bool = False) -> NormalizedFlow:
                 raise
             warnings.append(f"{exc}; treated as missing")
 
+    if not lenient:
+        _check_plausibility(known)
     _consistency_warnings(known, warnings)
     derived = _derive(known, warnings)
     available = {**known, **derived}

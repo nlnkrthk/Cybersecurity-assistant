@@ -6,6 +6,7 @@ Events are appended to the turn's trace (returned with every answer) and also se
 live through LangGraph's custom stream, so callers can print them as they happen.
 
 Event types:
+    guard_input   input guardrail: action (allowed | redacted | blocked), category, matched, redactions
     route         supervisor decision: route, reason, plan
     agent_start   an agent begins
     tool_call     an agent calls a tool: tool, args
@@ -13,6 +14,7 @@ Event types:
     agent_end     an agent finished: outcome (findings | follow_up), llm_calls, tool_calls, elapsed_ms
     follow_up     the turn ends with a question to the user
     final         the final answer node finished: elapsed_ms
+    guard_output  output guardrail: issues found and fixed (empty list = passed)
 """
 import json
 import time
@@ -112,9 +114,44 @@ def _secs(event: Dict[str, Any]) -> str:
     return "" if ms is None else f"  ({ms / 1000:.1f}s)"
 
 
+def _describe_issue(issue: Dict[str, Any]) -> str:
+    check = issue["check"]
+    if check == "unverified_incident_ids":
+        return f"unverified incident ID(s) marked: {', '.join(issue['ids'])}"
+    if check == "unmatched_percentages":
+        return "figure(s) not in tool results flagged: " + ", ".join(f"{v:g}%" for v in issue["values"])
+    if check == "priority_mismatch":
+        return f"priority {', '.join(issue['stated'])} differs from tools ({', '.join(issue['tools'])}); flagged"
+    if check == "dangerous_commands":
+        return f"{len(issue['reasons'])} dangerous command(s) removed"
+    if check == "confidence_disclaimer":
+        return f"disclaimer added ({issue['level']} confidence)"
+    if check == "historical_label_mismatch":
+        return f"note added: {issue['incident_id']} label {issue['historical_label']} vs prediction {issue['prediction']}"
+    if check == "sensitive_data":
+        return f"redacted: {', '.join(issue['kinds'])}"
+    if check == "system_prompt_leak":
+        return "system prompt leak blocked; reply replaced"
+    return check
+
+
 def format_event(event: Dict[str, Any]) -> Optional[str]:
     """One console line per event (tool_call is folded into its tool_result line)."""
     kind = event["type"]
+    if kind == "guard_input":
+        if event["action"] == "blocked":
+            return f"[GUARD-IN]  BLOCKED: {event['category']} (rule: {event['matched']})"
+        notes = []
+        if event.get("redactions"):
+            notes.append(f"redacted: {', '.join(event['redactions'])}")
+        if event.get("truncated"):
+            notes.append("message trimmed")
+        return "[GUARD-IN]  allowed" + (" | " + " | ".join(notes) if notes else "")
+    if kind == "guard_output":
+        issues = event.get("issues") or []
+        if not issues:
+            return "[GUARD-OUT] passed, no changes"
+        return "[GUARD-OUT] " + "; ".join(_describe_issue(i) for i in issues)
     if kind == "route":
         plan = " -> ".join(AGENT_NAMES[a] for a in event["plan"]) or "no agents"
         return (
@@ -135,7 +172,7 @@ def format_event(event: Dict[str, Any]) -> Optional[str]:
             f"{event['tool_calls']} tool call(s){_secs(event)}"
         )
     if kind == "follow_up":
-        return "[FOLLOW-UP] key metrics missing - asking the user"
+        return "[FOLLOW-UP] asking the user for missing or corrected information"
     if kind == "final":
         return f"[FINAL ANSWER] written from {event['findings']} agent finding(s){_secs(event)}"
     return None
