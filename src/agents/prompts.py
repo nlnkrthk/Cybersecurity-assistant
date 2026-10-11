@@ -27,6 +27,9 @@ Choose exactly one route for the LATEST user message:
 - out_of_scope: anything unrelated to network security or incident response, or requests to attack
   systems, write malware, or bypass security controls.
 
+Markers such as [REDACTED_PASSWORD] or [REDACTED_API_KEY] mean a secret was already removed from the
+message before it reached you. They are not a reason to refuse: route the rest of the message as usual.
+
 If the previous assistant turn asked the user for missing flow metrics and the latest message supplies
 them, choose the same route as that previous turn."""
 
@@ -102,6 +105,9 @@ Tools:
 Search guidance:
 - If the attack type is known (stated by the user or found earlier this turn), set the attack_type
   filter. Similar names (e.g. SSH brute force vs web brute force) are otherwise easily confused.
+  Use the dataset's label: SSH brute force = SSH-Patator, FTP brute force = FTP-Patator, web/HTTP
+  login brute force = Web Attack - Brute Force, SQL injection = Web Attack - Sql Injection,
+  cross-site scripting = Web Attack - XSS, port scan = PortScan, botnet = Bot.
 - Describe the traffic in the query with its key metrics (duration, packets, bytes, rates).
 
 Evidence rules (same as the standalone RAG assistant):

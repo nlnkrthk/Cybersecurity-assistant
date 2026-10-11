@@ -1,0 +1,32 @@
+# Streamlit settings for the front end (frontend/app.py). Streamlit reads this file from the
+# directory it is started in; scripts/frontend/run_frontend.py always starts from the project root.
+
+[client]
+toolbarMode = "minimal"        # no Deploy button or developer menu
+showSidebarNavigation = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F6FB"
+textColor = "#0F172A"
+borderColor = "#E2E8F0"
+showWidgetBorder = true
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+headingFontWeights = [700, 650, 600]
+linkColor = "#2563EB"
+dataframeHeaderBackgroundColor = "#F3F6FB"
+chartCategoricalColors = ["#2563EB", "#DC2626", "#16A34A", "#EA580C", "#7C3AED", "#0891B2", "#CA8A04"]
+
+[theme.sidebar]
+backgroundColor = "#0B1B33"
+secondaryBackgroundColor = "#15294A"
+textColor = "#E5ECF6"
+borderColor = "#2A4470"
+primaryColor = "#60A5FA"
+showWidgetBorder = true

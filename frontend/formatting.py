@@ -2,6 +2,7 @@
 Pure helpers for the front end (no Streamlit calls, so they are unit-tested):
 flow fields, trace-event lines, badges and result summaries.
 """
+import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -58,15 +59,17 @@ EXAMPLE_INCIDENTS = {
     "Web Attack - XSS": "INC-000018",
 }
 
-PRIORITY_COLORS = {"P1": "#d62728", "P2": "#ff7f0e", "P3": "#e6b800", "P4": "#2ca02c"}
-PRIORITY_BADGES = {"P1": ":red-badge[P1 Critical]", "P2": ":orange-badge[P2 High]",
-                   "P3": ":yellow-badge[P3 Medium]", "P4": ":green-badge[P4 Low]"}
-VERDICT_BADGES = {"pass": ":green-badge[✓ pass]", "needs_review": ":orange-badge[needs review]",
-                  "fail": ":red-badge[✗ fail]", "error": ":gray-badge[not scored]"}
+PRIORITY_COLORS = {"P1": "#DC2626", "P2": "#EA580C", "P3": "#CA8A04", "P4": "#16A34A"}
+PRIORITY_INFO = {  # label, action
+    "P1": ("Critical", "Investigate now"),
+    "P2": ("High", "Investigate today"),
+    "P3": ("Medium", "Review when possible"),
+    "P4": ("Low", "Monitor"),
+}
 ROUTE_LABELS = {
-    "classify": "Classification", "risk": "Risk & priority", "search": "Incident search",
-    "recommend": "Response", "investigate": "Full investigation", "general": "General",
-    "blocked": "Blocked",
+    "classify": "Attack classification", "risk": "Risk & priority", "search": "Incident search",
+    "recommend": "Response advice", "investigate": "Full investigation", "general": "General question",
+    "out_of_scope": "Out of scope", "blocked": "Blocked",
 }
 AGENT_NAMES = {
     "classification": "Classification agent",
@@ -78,12 +81,8 @@ FLOW_TOOLS = {"explain_flow", "classify_attack_type", "assess_intrusion_risk", "
 INCIDENT_ID = re.compile(r"^INC-\d{6}$", re.IGNORECASE)
 
 
-def priority_badge(priority: Optional[str]) -> str:
-    return PRIORITY_BADGES.get(priority or "", f":gray-badge[{priority or '?'}]")
 
 
-def verdict_badge(verdict: Optional[str]) -> str:
-    return VERDICT_BADGES.get(verdict or "", f":gray-badge[{verdict or '?'}]")
 
 
 def route_badge(route: Optional[str]) -> str:
@@ -95,13 +94,8 @@ def pct(value: Optional[float]) -> str:
     return "–" if value is None else f"{value:.0%}"
 
 
-def secs(ms: Optional[float]) -> str:
-    return "" if ms is None else f" ({ms / 1000:.1f}s)"
 
 
-def _args_text(args: Dict[str, Any], limit: int = 90) -> str:
-    text = ", ".join(f"{k}={v}" for k, v in (args or {}).items() if v not in (None, [], {}, ""))
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def describe_issue(issue: Dict[str, Any]) -> str:
@@ -129,60 +123,165 @@ def describe_issue(issue: Dict[str, Any]) -> str:
     return str(check)
 
 
-def trace_line(event: Dict[str, Any]) -> Optional[str]:
-    """Markdown line for a live agent-trace event; None for events folded into others."""
-    kind = event.get("type")
-    if kind == "guard_input":
-        if event.get("action") == "blocked":
-            return f"🛡️ **Input guardrail:** blocked ({event.get('category')})"
-        notes = []
-        if event.get("redactions"):
-            notes.append(f"redacted {', '.join(event['redactions'])}")
-        if event.get("truncated"):
-            notes.append("message trimmed")
-        return "🛡️ **Input guardrail:** allowed" + (f" — {'; '.join(notes)}" if notes else "")
-    if kind == "route":
-        plan = " → ".join(AGENT_NAMES.get(a, a) for a in event.get("plan", [])) or "no agents"
-        return (f"🧭 **Supervisor:** route `{event.get('route')}`{secs(event.get('elapsed_ms'))} — "
-                f"{event.get('reason', '')}  \nPlan: {plan}")
-    if kind == "agent_start":
-        return f"🤖 **{AGENT_NAMES.get(event.get('agent'), event.get('agent'))}** started"
-    if kind == "tool_result":
-        return (f"&nbsp;&nbsp;&nbsp;🔧 `{event.get('tool')}({_args_text(event.get('args', {}))})` → "
-                f"{event.get('summary', '')}{secs(event.get('elapsed_ms'))}")
-    if kind == "agent_end":
-        outcome = "asked a follow-up question" if event.get("outcome") == "follow_up" else "findings ready"
-        return (f"&nbsp;&nbsp;&nbsp;✅ {outcome}: {event.get('llm_calls', 0)} LLM call(s), "
-                f"{event.get('tool_calls', 0)} tool call(s){secs(event.get('elapsed_ms'))}")
-    if kind == "follow_up":
-        return "❓ Asking you for missing or corrected information"
-    if kind == "final":
-        return f"📝 **Final answer** written from {event.get('findings', 0)} agent finding(s){secs(event.get('elapsed_ms'))}"
-    if kind == "guard_output":
-        issues = event.get("issues") or []
-        if not issues:
-            return "🛡️ **Output guardrail:** passed"
-        return "🛡️ **Output guardrail:** " + "; ".join(describe_issue(i) for i in issues)
-    if kind == "judge":
-        if event.get("verdict") == "error":
-            return f"⚖️ **Judge:** not scored ({event.get('error')})"
-        return (f"⚖️ **Judge:** {event.get('overall', 0):.1f}/5 {event.get('verdict')}"
-                f"{secs(event.get('elapsed_ms'))}")
-    return None
+AGENT_ROLES = {
+    "classification": "Identifies the attack type",
+    "risk_priority": "Scores intrusion risk, anomaly and priority",
+    "incident_search": "Finds similar past incidents",
+    "response": "Recommends investigation and response steps",
+}
+TOOL_LABELS = {
+    "lookup_incident": "Looked up the incident",
+    "classify_attack_type": "Classified the attack type",
+    "explain_flow": "Analysed the flow",
+    "assess_intrusion_risk": "Assessed intrusion risk",
+    "prioritize_flow": "Set the priority",
+    "prioritize_flows": "Ranked the flows",
+    "search_similar_incidents": "Searched past incidents",
+    "get_attack_profile": "Loaded the attack-type profile",
+    "list_attack_types": "Listed the attack types",
+}
+GUARD_CATEGORIES = {
+    "prompt_injection": "attempt to change the assistant's instructions",
+    "harmful_request": "request for harmful content",
+    "too_long": "message too long",
+}
 
 
-def status_label(event: Dict[str, Any]) -> Optional[str]:
-    """Short label for the running status box."""
-    kind = event.get("type")
-    if kind == "route":
-        return f"Routing to {ROUTE_LABELS.get(event.get('route'), event.get('route'))}…"
-    if kind == "agent_start":
-        return f"{AGENT_NAMES.get(event.get('agent'), 'Agent')} working…"
-    if kind == "final":
-        return "Checking the answer…"
-    if kind == "guard_output":
-        return "Finishing…"
-    return None
+def clean_summary(text: str) -> str:
+    """Tool summary for people: '| filters {"label": "SSH-Patator"}' -> '· filtered by label SSH-Patator'."""
+    def filters(match: "re.Match") -> str:
+        try:
+            parts = json.loads(match.group(1))
+        except ValueError:
+            return match.group(0)
+        names = {"label": "attack type", "dst_port": "port"}
+        return "· filtered by " + ", ".join(f"{names.get(k, k)} {v}" for k, v in parts.items())
+
+    text = re.sub(r"\|\s*filters\s*(\{.*\})", filters, str(text or ""))
+    return text.replace("[input reduced]", "(partial input)").replace("[input low]", "(very partial input)")
+
+
+def _step(key: str, title: str, role: str = "") -> Dict[str, Any]:
+    return {"key": key, "title": title, "role": role, "status": "pending", "detail": "", "elapsed_ms": None,
+            "tools": []}
+
+
+def pipeline_steps(events: List[Dict[str, Any]], judge: bool = False, running: bool = False) -> List[Dict[str, Any]]:
+    """Turn agent-trace events into the steps shown in the progress tracker.
+
+    Step status: pending | running | done | warning | blocked | skipped. While `running`, the first
+    step not yet finished is shown as running; when the turn is over, unfinished steps are skipped.
+    """
+    steps = [_step("guard_in", "Safety check", "Screens the question for unsafe requests and secrets"),
+             _step("route", "Planning", "Decides which specialist agents are needed"),
+             _step("final", "Writing the answer", "Combines the agents' findings into one reply"),
+             _step("guard_out", "Answer check", "Verifies incident IDs, figures, priorities and commands")]
+    if judge:
+        steps.append(_step("judge", "Quality grading", "LLM-as-Judge scores the answer 1–5"))
+    by_key = {s["key"]: s for s in steps}
+    stopped = False
+
+    for event in events:
+        kind = event.get("type")
+        if kind == "guard_input":
+            step = by_key["guard_in"]
+            if event.get("action") == "blocked":
+                category = event.get("category") or ""
+                step.update(status="blocked", detail=f"Blocked: {GUARD_CATEGORIES.get(category, category.replace('_', ' '))}")
+                stopped = True
+            elif event.get("redactions"):
+                step.update(status="done", detail=f"Passed. Removed before processing: {', '.join(event['redactions'])}")
+            else:
+                step.update(status="done", detail="Passed")
+        elif kind == "route":
+            step = by_key["route"]
+            plan = event.get("plan") or []
+            agents = ", ".join(AGENT_NAMES.get(a, a) for a in plan) or "no specialist agents needed"
+            step.update(status="done", elapsed_ms=event.get("elapsed_ms"),
+                        detail=f"{ROUTE_LABELS.get(event.get('route'), event.get('route'))}: {agents}")
+            step["note"] = event.get("reason", "")
+            index = steps.index(by_key["final"])
+            for offset, agent in enumerate(plan):
+                agent_step = _step(f"agent:{agent}", AGENT_NAMES.get(agent, agent), AGENT_ROLES.get(agent, ""))
+                steps.insert(index + offset, agent_step)
+                by_key[agent_step["key"]] = agent_step
+            if event.get("route") == "out_of_scope":
+                stopped = True
+        elif kind == "agent_start":
+            step = by_key.get(f"agent:{event.get('agent')}")
+            if step:
+                step["status"] = "running"
+        elif kind in ("tool_call", "tool_result"):
+            step = by_key.get(f"agent:{event.get('agent')}") or next(
+                (s for s in steps if s["key"].startswith("agent:") and s["status"] == "running"), None)
+            if step is None:
+                continue
+            label = TOOL_LABELS.get(event.get("tool"), event.get("tool"))
+            if kind == "tool_call":
+                step["tools"].append({"tool": event.get("tool"), "label": label, "status": "running", "detail": ""})
+            else:
+                tool = next((t for t in reversed(step["tools"])
+                             if t["tool"] == event.get("tool") and t["status"] == "running"), None)
+                if tool is None:
+                    tool = {"tool": event.get("tool"), "label": label}
+                    step["tools"].append(tool)
+                failed = str(event.get("status")) == "error" or str(event.get("summary", "")).startswith("error")
+                tool.update(status="warning" if failed else "done", detail=clean_summary(event.get("summary", "")),
+                            elapsed_ms=event.get("elapsed_ms"))
+        elif kind == "agent_end":
+            step = by_key.get(f"agent:{event.get('agent')}")
+            if step:
+                follow_up = event.get("outcome") == "follow_up"
+                calls = event.get("tool_calls", 0)
+                step.update(status="warning" if follow_up else "done", elapsed_ms=event.get("elapsed_ms"),
+                            detail="Needs more information from you" if follow_up
+                            else f"Done · {calls} tool call{'s' if calls != 1 else ''}")
+        elif kind == "follow_up":
+            by_key["final"].update(status="done", title="Asking you a question",
+                                   detail="Some details are missing, so the assistant asks for them")
+        elif kind == "final":
+            by_key["final"].update(status="done", elapsed_ms=event.get("elapsed_ms"),
+                                   detail=f"Written from {event.get('findings', 0)} agent finding(s)")
+        elif kind == "guard_output":
+            issues = event.get("issues") or []
+            by_key["guard_out"].update(
+                status="warning" if issues else "done",
+                detail="Passed, no changes" if not issues else "Adjusted: " + "; ".join(describe_issue(i) for i in issues))
+        elif kind == "judge" and "judge" in by_key:
+            if event.get("verdict") == "error":
+                by_key["judge"].update(status="warning", detail="Could not be scored")
+            else:
+                verdict = str(event.get("verdict", "")).replace("_", " ")
+                by_key["judge"].update(status="done" if event.get("verdict") == "pass" else "warning",
+                                       elapsed_ms=event.get("elapsed_ms"),
+                                       detail=f"{event.get('overall', 0):.1f} / 5 · {verdict}")
+
+    if stopped:
+        for step in steps:
+            if step["status"] == "pending":
+                step["status"] = "skipped"
+    elif running:
+        if not any(s["status"] == "running" for s in steps):
+            next_step = next((s for s in steps if s["status"] == "pending"), None)
+            if next_step:
+                next_step["status"] = "running"
+    else:
+        for step in steps:
+            if step["status"] in ("pending", "running"):
+                step["status"] = "skipped"
+    return steps
+
+
+def pipeline_summary(steps: List[Dict[str, Any]]) -> str:
+    """One line for the collapsed tracker, e.g. 'Safety check → Planning → 4 agents → Answer check'."""
+    agents = sum(s["key"].startswith("agent:") and s["status"] != "skipped" for s in steps)
+    tools = sum(len(s["tools"]) for s in steps)
+    parts = [f"{agents} agent{'s' if agents != 1 else ''}"] if agents else []
+    if tools:
+        parts.append(f"{tools} tool call{'s' if tools != 1 else ''}")
+    if any(s["status"] == "blocked" for s in steps):
+        return "Stopped by the safety check"
+    return " · ".join(parts) or "Answered directly"
 
 
 def has_flow_analysis(result: Dict[str, Any]) -> bool:

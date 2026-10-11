@@ -1,0 +1,9 @@
+# DeepEval evaluation (scripts/evaluation/run_deepeval.py). Install AFTER requirements.txt:
+#
+#   pip install -r requirements-eval.txt
+#   pip install "click>=8.4.2,<9"
+#
+# deepeval 4.2.8 pins click<8.4 while huggingface-hub (embeddings) needs click>=8.4.2. Both use
+# click only for their command-line tools; the evaluation uses deepeval as a library, which works
+# with click 8.5 (verified). The second command restores the version huggingface-hub needs.
+deepeval==4.2.8

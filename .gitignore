@@ -131,3 +131,7 @@ data/evaluation/
 # Analyst feedback and retrained model versions (generated)
 data/feedback/
 ml/models/versions/
+
+# DeepEval: cache folder; the labelled case set is committed
+.deepeval/
+!src/evaluation/cases/*.json

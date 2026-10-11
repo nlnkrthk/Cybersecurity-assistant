@@ -10,7 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-APP = Path(__file__).resolve().parents[2] / "frontend" / "app.py"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+APP = PROJECT_ROOT / "frontend" / "app.py"
 
 
 def main() -> None:
@@ -31,7 +32,8 @@ def main() -> None:
         "--server.headless", "true",
         "--browser.gatherUsageStats", "false",
     ]
-    sys.exit(subprocess.call(command, env=env))
+    # Started from the project root so Streamlit reads .streamlit/config.toml (theme, toolbar).
+    sys.exit(subprocess.call(command, env=env, cwd=PROJECT_ROOT))
 
 
 if __name__ == "__main__":

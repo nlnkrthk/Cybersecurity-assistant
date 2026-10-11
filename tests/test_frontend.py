@@ -119,7 +119,11 @@ def test_chat_stream_then_feedback_and_stats():
         result = events[-1][1]
         assert result["answer"] == "INC-000035 is SSH-Patator." and result["turn_id"]
         assert fmt.has_flow_analysis(result) and fmt.predicted_label(result) == "SSH-Patator"
-        assert all(fmt.trace_line(data) or data["type"] == "tool_call" for _, data in events[:-1])
+        steps = fmt.pipeline_steps([data for _, data in events[:-1]])
+        assert [s["title"] for s in steps] == ["Safety check", "Planning", "Classification agent",
+                                               "Writing the answer", "Answer check"]
+        assert all(s["status"] == "done" for s in steps)
+        assert steps[2]["tools"][0]["label"] == "Classified the attack type"
 
         row = api.send_feedback(result["thread_id"], "down", turn_id=result["turn_id"],
                                 comment="wrong", corrected_label="ftp-patator")
@@ -191,13 +195,7 @@ def test_ranking_rows_handle_incidents_flows_and_follow_ups():
     assert rows[2]["priority"] == "needs data" and rows[2]["reason"] == "Need bytes"
 
 
-def test_trace_lines_and_guardrail_notices():
-    assert "blocked" in fmt.trace_line({"type": "guard_input", "action": "blocked", "category": "prompt_injection"})
-    assert "Risk & Priority agent" in fmt.trace_line({"type": "route", "route": "risk", "reason": "r",
-                                                      "plan": ["risk_priority"], "elapsed_ms": 1200})
-    assert fmt.trace_line({"type": "tool_call"}) is None
-    assert "passed" in fmt.trace_line({"type": "guard_output", "issues": []})
-    assert "4.2/5" in fmt.trace_line({"type": "judge", "verdict": "pass", "overall": 4.2})
+def test_guardrail_notices():
     result = {"guardrails": {
         "input": {"action": "redacted", "redactions": ["email"]},
         "output": {"issues": [{"check": "unverified_incident_ids", "ids": ["INC-123456"]},
@@ -205,6 +203,78 @@ def test_trace_lines_and_guardrail_notices():
     }}
     inputs, outputs = fmt.guardrail_notices(result)
     assert "email" in inputs[0] and len(outputs) == 1 and "INC-123456" in outputs[0]
+
+
+ROUTE = {"type": "route", "route": "investigate", "reason": "full analysis", "elapsed_ms": 1200,
+         "plan": ["classification", "risk_priority"]}
+
+
+def by_title(steps):
+    return {s["title"]: s for s in steps}
+
+
+def test_pipeline_live_progress():
+    steps = fmt.pipeline_steps([], running=True)
+    assert [s["status"] for s in steps] == ["running", "pending", "pending", "pending"]
+
+    events = [{"type": "guard_input", "action": "allowed"}, ROUTE, {"type": "agent_start", "agent": "classification"},
+              {"type": "tool_call", "agent": "classification", "tool": "lookup_incident", "args": {}}]
+    steps = by_title(fmt.pipeline_steps(events, judge=True, running=True))
+    assert list(steps) == ["Safety check", "Planning", "Classification agent", "Risk & Priority agent",
+                           "Writing the answer", "Answer check", "Quality grading"]
+    assert steps["Planning"]["detail"] == "Full investigation: Classification agent, Risk & Priority agent"
+    assert steps["Classification agent"]["status"] == "running"
+    assert steps["Classification agent"]["tools"] == [
+        {"tool": "lookup_incident", "label": "Looked up the incident", "status": "running", "detail": ""}]
+    assert steps["Risk & Priority agent"]["status"] == "pending"
+
+    events += [{"type": "tool_result", "agent": "classification", "tool": "lookup_incident",
+                "summary": "INC-000035: historical label SSH-Patator", "elapsed_ms": 40},
+               {"type": "agent_end", "agent": "classification", "outcome": "findings", "tool_calls": 1,
+                "llm_calls": 2, "elapsed_ms": 3000}]
+    steps = by_title(fmt.pipeline_steps(events, judge=True, running=True))
+    assert steps["Classification agent"]["status"] == "done"
+    assert steps["Classification agent"]["detail"] == "Done · 1 tool call"
+    assert steps["Classification agent"]["tools"][0]["status"] == "done"
+    assert steps["Risk & Priority agent"]["status"] == "running"  # next step is shown as running
+
+
+def test_pipeline_finished_turn_and_judge():
+    events = [{"type": "guard_input", "action": "redacted", "redactions": ["password"]}, ROUTE,
+              {"type": "final", "findings": 2, "elapsed_ms": 900},
+              {"type": "guard_output", "issues": [{"check": "unverified_incident_ids", "ids": ["INC-1"]}]},
+              {"type": "judge", "verdict": "needs_review", "overall": 3.6}]
+    steps = by_title(fmt.pipeline_steps(events, judge=True))
+    assert "password" in steps["Safety check"]["detail"]
+    assert steps["Classification agent"]["status"] == "skipped"  # never started
+    assert steps["Answer check"]["status"] == "warning" and "INC-1" in steps["Answer check"]["detail"]
+    assert steps["Quality grading"]["detail"] == "3.6 / 5 · needs review"
+
+
+def test_pipeline_blocked_and_follow_up():
+    blocked = fmt.pipeline_steps([{"type": "guard_input", "action": "blocked", "category": "prompt_injection"}],
+                                 running=True)
+    assert blocked[0]["status"] == "blocked" and "instructions" in blocked[0]["detail"]
+    assert all(s["status"] == "skipped" for s in blocked[1:])
+    assert fmt.pipeline_summary(blocked) == "Stopped by the safety check"
+
+    follow = [{"type": "guard_input", "action": "allowed"},
+              {"type": "route", "route": "risk", "reason": "r", "plan": ["risk_priority"]},
+              {"type": "agent_start", "agent": "risk_priority"},
+              {"type": "agent_end", "agent": "risk_priority", "outcome": "follow_up", "tool_calls": 1},
+              {"type": "follow_up"}, {"type": "guard_output", "issues": []}]
+    steps = by_title(fmt.pipeline_steps(follow))
+    assert steps["Risk & Priority agent"]["status"] == "warning"
+    assert steps["Asking you a question"]["status"] == "done"
+    assert fmt.pipeline_summary(list(steps.values())) == "1 agent"
+
+
+def test_pipeline_html_escapes_text():
+    from components import pipeline_html
+
+    steps = fmt.pipeline_steps([{"type": "route", "route": "general", "reason": "<script>x</script>", "plan": []}])
+    out = pipeline_html(steps, "Heading")
+    assert "<script>" not in out and "&lt;script&gt;" in out and "Heading" in out
 
 
 def test_shap_rows_sorted_by_strength():
@@ -215,7 +285,7 @@ def test_shap_rows_sorted_by_strength():
 # ============================================================================
 # Streamlit pages (API not running: pages must show errors, not crash)
 # ============================================================================
-@pytest.mark.parametrize("page", ["app.py", "views/assistant.py", "views/flow_analyzer.py",
+@pytest.mark.parametrize("page", ["app.py", "views/home.py", "views/assistant.py", "views/flow_analyzer.py",
                                   "views/incident_search.py", "views/triage_queue.py", "views/answer_quality.py"])
 def test_pages_render_without_api(page, monkeypatch):
     from streamlit.testing.v1 import AppTest
