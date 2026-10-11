@@ -90,12 +90,49 @@ def _cached_client(url: str, client_class_id: int) -> ApiClient:
 
 
 def get_client() -> ApiClient:
-    """One shared HTTP client per API URL. Keyed on the class too, so a hot reload of api_client
+    """The HTTP client with this browser session's login token. The connection pool is shared
+    (one per API URL); the token never is. Keyed on the class too, so a hot reload of api_client
     (code change while running) never leaves an old client raising the old ApiError class."""
-    return _cached_client(base_url(), id(ApiClient))
+    return _cached_client(base_url(), id(ApiClient)).with_token(st.session_state.get("auth_token"))
 
 
 get_client.clear = _cached_client.clear
+
+
+# ============================================================================
+# Signed-in user (kept in the Streamlit session: closing the tab or a hard refresh signs out)
+# ============================================================================
+def current_user() -> Optional[Dict[str, Any]]:
+    return st.session_state.get("auth_user")
+
+
+def start_session(session: Dict[str, Any]) -> None:
+    """Sign in with an /auth/login or /auth/signup response, starting from a clean session."""
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.session_state.auth_token = session["token"]
+    st.session_state.auth_user = session["user"]
+
+
+def end_session(revoke: bool = True, notice: Optional[str] = None) -> None:
+    """Sign out: revoke the token on the server and forget everything of this user in the browser."""
+    if revoke and st.session_state.get("auth_token"):
+        try:
+            get_client().logout()
+        except ApiError:
+            pass  # the token expires on its own
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    if notice:
+        st.session_state.auth_notice = notice
+
+
+def session_expired(exc: ApiError) -> bool:
+    """True (and signed out) when the API rejected the token; the next rerun shows the sign-in page."""
+    if exc.status == 401 and st.session_state.get("auth_token"):
+        end_session(revoke=False, notice="Your session has expired. Please sign in again.")
+        return True
+    return False
 
 
 def call(fn: Callable[[], Any], what: str = "The request") -> Optional[Any]:
@@ -103,6 +140,8 @@ def call(fn: Callable[[], Any], what: str = "The request") -> Optional[Any]:
     try:
         return fn()
     except ApiError as exc:
+        if session_expired(exc):
+            st.rerun()
         st.error(f"{what} failed. {exc.message}", icon=":material/error:")
         return None
 
@@ -154,6 +193,19 @@ def page_header(title: str, subtitle: str, how_to: Sequence[str] = (), icon: str
 def _status_row(name: str, value: str, state: str) -> str:
     return (f'<li><span class="name"><span class="dot {state}"></span>{html.escape(name)}</span>'
             f'<span class="value">{html.escape(value)}</span></li>')
+
+
+def account_sidebar() -> None:
+    """Signed-in user and the Log out button."""
+    user = current_user()
+    if not user:
+        return
+    with st.sidebar:
+        st.markdown('<div class="side-title">Account</div>', unsafe_allow_html=True)
+        name = user["username"].replace("_", r"\_")  # usernames are letters, digits, '.', '_', '-'
+        st.markdown(f":material/account_circle: Signed in as **{name}**")
+        st.button("Log out", icon=":material/logout:", on_click=end_session, width="stretch", key="logout")
+        st.divider()
 
 
 def status_sidebar() -> Dict[str, Any]:

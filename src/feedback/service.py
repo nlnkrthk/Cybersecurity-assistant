@@ -20,6 +20,7 @@ def record_feedback(
     corrected_label: Optional[str] = None,
     llm_model: Optional[str] = None,
     store=None,
+    username: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Store feedback for a turn (default: the conversation's latest turn).
 
@@ -40,7 +41,7 @@ def record_feedback(
             llm_model = None
 
     state = assistant.turn_state(thread_id, turn_id)
-    snapshot = build_snapshot(state, last_question(state.get("messages", [])), llm_model)
+    snapshot = {**build_snapshot(state, last_question(state.get("messages", [])), llm_model), "username": username}
 
     label = None
     if corrected_label:

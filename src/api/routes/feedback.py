@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from api.deps import AppState, get_assistant, get_state
+from api.deps import AppState, get_assistant, get_current_user, get_state, require_conversation_owner
 from api.schemas import FeedbackRequest
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
@@ -20,14 +20,18 @@ def _store():
 
 
 @router.post("", status_code=201, summary="Rate an answer")
-def add_feedback(body: FeedbackRequest, assistant=Depends(get_assistant), state: AppState = Depends(get_state)) -> Dict[str, Any]:
+def add_feedback(body: FeedbackRequest, user: Dict[str, Any] = Depends(get_current_user),
+                 assistant=Depends(get_assistant), state: AppState = Depends(get_state)) -> Dict[str, Any]:
     """Thumbs up/down, an optional comment and an optional corrected attack type for an answer.
 
     The question, answer and model prediction are taken from the conversation itself. Rating
     the same turn again updates the earlier feedback. A corrected label is shown in later
     answers about the same incident and is used when the classifier is retrained.
+    Only the owner of the conversation can rate it; the rating records their username.
     """
     from feedback.service import FeedbackError, record_feedback
+
+    require_conversation_owner(state, body.thread_id, user)
 
     try:
         return record_feedback(
@@ -38,6 +42,7 @@ def add_feedback(body: FeedbackRequest, assistant=Depends(get_assistant), state:
             comment=body.comment,
             corrected_label=body.corrected_label,
             llm_model=state.llm_model,
+            username=user["username"],
             store=_store(),
         )
     except KeyError as exc:

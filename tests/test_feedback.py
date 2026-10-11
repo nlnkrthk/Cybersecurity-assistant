@@ -7,7 +7,6 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 
 import feedback as feedback_pkg
 from agents.graph import Assistant
@@ -15,6 +14,7 @@ from feedback.retraining import FEATURES, collect_corrections, new_classifier, r
 from feedback.service import FeedbackError, record_feedback
 from feedback.snapshot import build_snapshot, has_flow
 from feedback.store import FeedbackStore
+from auth_utils import SignedInClient
 from test_agents import FakeLLM, route, text, tool_call
 
 
@@ -214,7 +214,7 @@ def test_no_database_means_no_feedback(tmp_path, monkeypatch):
 def make_client(assistant):
     from api.main import create_app
 
-    return TestClient(create_app(assistant=assistant, load_search_index=False))
+    return SignedInClient(create_app(assistant=assistant, load_search_index=False))
 
 
 def test_api_feedback_flow(store):

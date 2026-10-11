@@ -7,7 +7,8 @@ FastAPI app of the incident-response assistant.
 Startup loads the ML models and builds the assistant graph; the search indexes load
 in a background thread so the server is usable at once (GET /health shows progress).
 The assistant needs an LLM API key in .env (see agents.llm); without it /chat returns 503 and
-the direct ML / search endpoints still work.
+the direct ML / search endpoints still work. The assistant, conversation and feedback endpoints
+need a signed-in user (/auth); conversations are saved in SQLite and survive restarts.
 """
 import logging
 import os
@@ -26,7 +27,7 @@ from fastapi.responses import JSONResponse
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.deps import AppState  # noqa: E402
-from api.routes import chat, feedback, judge, ml, search, system  # noqa: E402
+from api.routes import auth, chat, feedback, judge, ml, search, system  # noqa: E402
 
 logger = logging.getLogger("api")
 
@@ -37,9 +38,10 @@ def _build_assistant(state: AppState) -> None:
     try:
         from agents.graph import Assistant
         from agents.llm import get_chat_model, llm_settings
+        from auth import chat_db_path, open_checkpointer
 
         llm = get_chat_model()
-        state.assistant = Assistant(llm=llm)
+        state.assistant = Assistant(llm=llm, checkpointer=open_checkpointer(chat_db_path()))
         settings = llm_settings()
         state.llm_model = f"{settings['provider']}:{settings['model']}"
     except Exception as exc:
@@ -47,20 +49,27 @@ def _build_assistant(state: AppState) -> None:
         logger.warning(f"Assistant unavailable: {exc}")
 
 
-def create_app(assistant: Optional[Any] = None, load_search_index: bool = True) -> FastAPI:
+def create_app(assistant: Optional[Any] = None, load_search_index: bool = True,
+               auth_store: Optional[Any] = None) -> FastAPI:
     """Build the app.
 
     Args:
-        assistant: an agents.graph.Assistant to use instead of the default Claude-backed one
-            (tests pass one with a scripted LLM).
+        assistant: an agents.graph.Assistant to use instead of the default one, which saves
+            conversations in SQLite (tests pass one with a scripted LLM and in-memory conversations).
         load_search_index: start loading the search indexes in the background at startup.
+        auth_store: an auth.AuthStore to use instead of the one at AUTH_DB_PATH.
     """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        from auth import AuthStore, LoginLimiter, auth_db_path
+        from config import SESSION_TTL_HOURS
         from services.ml_service import get_ml_service
 
         state = AppState()
+        own_store = auth_store is None
+        state.auth_store = AuthStore(auth_db_path(), SESSION_TTL_HOURS) if own_store else auth_store
+        state.login_limiter = LoginLimiter()
         started = time.perf_counter()
         state.ml_service = get_ml_service()
         if assistant is not None:
@@ -72,13 +81,17 @@ def create_app(assistant: Optional[Any] = None, load_search_index: bool = True) 
         app.state.services = state
         logger.info(f"API ready in {time.perf_counter() - started:.1f}s (assistant: {state.assistant is not None})")
         yield
+        if own_store:
+            state.auth_store.close()
 
     app = FastAPI(
         title="Cybersecurity Incident Response Assistant API",
         version="1.0.0",
         description=(
             "Multi-agent incident-response assistant on CIC-IDS2017 network flows.\n\n"
-            "- **/chat**: ask questions in plain language (supervisor + 4 agents, guardrails, agent trace)\n"
+            "- **/auth**: create an account and sign in, then use **Authorize** with the returned token\n"
+            "- **/chat**: ask questions in plain language (supervisor + 4 agents, guardrails, agent trace); "
+            "conversations are saved to your account\n"
             "- **/ml**: attack type, intrusion risk, anomaly, SHAP explanation and priority for flows\n"
             "- **/search**: hybrid retrieval of similar historical incidents\n\n"
             "Flows are given as any subset of the 24 metrics (numbers or strings with units such as "
@@ -91,7 +104,7 @@ def create_app(assistant: Optional[Any] = None, load_search_index: bool = True) 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "X-Thread-ID"],
     )
@@ -118,6 +131,7 @@ def create_app(assistant: Optional[Any] = None, load_search_index: bool = True) 
         )
 
     app.include_router(system.router)
+    app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(judge.router)
     app.include_router(feedback.router)

@@ -1,6 +1,7 @@
 """
 AI Assistant: chat with a live step-by-step progress tracker, answers with safety notices,
 quality check, process and data used, and analyst feedback (thumbs, comment, correction).
+Conversations are saved to the signed-in user's account (open, rename or delete them in the sidebar).
 """
 import time
 from typing import Any, Dict, List, Optional
@@ -9,7 +10,7 @@ import streamlit as st
 
 import formatting as fmt
 from api_client import ApiError
-from components import answer_extras, attack_type_names, get_client, page_header, show_pipeline
+from components import answer_extras, attack_type_names, get_client, page_header, session_expired, show_pipeline
 
 EXAMPLES = [
     ("Investigate an incident", "Investigate incident INC-000035 and tell me how to respond"),
@@ -22,7 +23,6 @@ NO_CORRECTION = "No correction"
 ss = st.session_state
 ss.setdefault("thread_id", None)
 ss.setdefault("chat", [])            # [{"role", "content", "result"?, "error"?}]
-ss.setdefault("threads", {})         # thread_id -> title, conversations of this browser session
 ss.setdefault("feedback_status", {})  # turn_id -> (kind, message)
 ss.setdefault("pending_prompt", None)
 ss.setdefault("thread_id_for_turn", {})  # turn_id -> thread_id, for feedback callbacks
@@ -39,10 +39,45 @@ def load_conversation(thread_id: str) -> None:
     try:
         history = get_client().history(thread_id)
     except ApiError as exc:
+        if session_expired(exc):
+            st.rerun()
         st.toast(f"Could not load the conversation: {exc.message}", icon=":material/error:")
         return
     ss.thread_id = thread_id
     ss.chat = [{"role": m["role"], "content": m["content"]} for m in history["messages"]]
+
+
+def saved_conversations() -> List[Dict[str, Any]]:
+    try:
+        return get_client().conversations()
+    except ApiError as exc:
+        if session_expired(exc):
+            st.rerun()
+        st.caption(f"Saved conversations are unavailable: {exc.message}")
+        return []
+
+
+def rename_conversation(thread_id: str) -> None:
+    title = (ss.get(f"rename_{thread_id}") or "").strip()
+    if not title:
+        return
+    try:
+        get_client().rename_thread(thread_id, title)
+    except ApiError as exc:
+        if not session_expired(exc):
+            st.toast(f"Could not rename: {exc.message}", icon=":material/error:")
+
+
+def delete_conversation(thread_id: str) -> None:
+    try:
+        get_client().delete_thread(thread_id)
+    except ApiError as exc:
+        if not session_expired(exc):
+            st.toast(f"Could not delete: {exc.message}", icon=":material/error:")
+        return
+    if ss.thread_id == thread_id:
+        new_conversation()
+    st.toast("Conversation deleted.", icon=":material/delete:")
 
 
 with st.sidebar:
@@ -53,14 +88,27 @@ with st.sidebar:
     judge_on = st.toggle("Quality-check each answer", key="judge_on",
                          help="An independent AI grader scores every answer from 1 to 5 (faithfulness, "
                               "correctness, relevance, actionability, safety). Adds a few seconds per answer.")
-    if ss.threads:
-        options = list(ss.threads)
+    st.markdown('<div class="side-title">My conversations</div>', unsafe_allow_html=True)
+    saved = saved_conversations()
+    if not saved:
+        st.caption("Your conversations will be saved here.")
+    else:
+        titles = {c["thread_id"]: c["title"] for c in saved}
+        options = list(titles)
         current = options.index(ss.thread_id) if ss.thread_id in options else None
-        picked = st.selectbox("Earlier conversations", options, index=current,
-                              format_func=lambda t: ss.threads[t], placeholder="Open an earlier conversation")
+        picked = st.selectbox("Open a conversation", options, index=current, format_func=titles.get,
+                              placeholder=f"{len(options)} saved: choose one", label_visibility="collapsed")
         if picked and picked != ss.thread_id:
             load_conversation(picked)
             st.rerun()
+        if ss.thread_id in titles:
+            with st.popover("Rename or delete", icon=":material/edit_note:", width="stretch"):
+                st.text_input("New title", value=titles[ss.thread_id], max_chars=200,
+                              key=f"rename_{ss.thread_id}")
+                st.button("Save title", icon=":material/check:", on_click=rename_conversation,
+                          args=(ss.thread_id,), width="stretch")
+                st.button("Delete this conversation", icon=":material/delete:", on_click=delete_conversation,
+                          args=(ss.thread_id,), width="stretch")
 
 
 # ============================================================================
@@ -72,7 +120,8 @@ def send_feedback(turn_id: str, rating: str, comment: Optional[str] = None,
         row = get_client().send_feedback(ss.thread_id_for_turn[turn_id], rating, turn_id=turn_id,
                                          comment=comment, corrected_label=corrected_label)
     except ApiError as exc:
-        ss.feedback_status[turn_id] = ("error", exc.message)
+        if not session_expired(exc):
+            ss.feedback_status[turn_id] = ("error", exc.message)
         return
     note = f" Correction saved: **{row['corrected_label']}**." if row.get("corrected_label") else ""
     ss.feedback_status[turn_id] = ("ok", f"Thanks, your feedback was saved.{note}")
@@ -153,6 +202,8 @@ def run_turn(prompt: str) -> None:
                 elif kind == "result":
                     result = data
         except ApiError as exc:
+            if session_expired(exc):
+                st.rerun()
             if exc.status is None and not events:  # stream not reachable: try the plain endpoint once
                 try:
                     tracker.info("Live progress is unavailable; waiting for the full answer…", icon=":material/hourglass:")
@@ -167,7 +218,6 @@ def run_turn(prompt: str) -> None:
 
     if result:
         ss.thread_id = result["thread_id"]
-        ss.threads.setdefault(ss.thread_id, prompt[:60] + ("…" if len(prompt) > 60 else ""))
         ss.chat.append({"role": "assistant", "content": result["answer"], "result": result})
     else:
         ss.chat.append({"role": "assistant", "content": "", "error": error})
@@ -182,7 +232,9 @@ page_header("AI Assistant",
                     "Read the answer. Under it you can open **How this answer was produced** and **Data used**.",
                     "If details such as byte counts are missing, the assistant asks for them; just reply.",
                     "Rate the answer with 👍 / 👎. If an attack type is wrong, correct it; this improves the model.",
-                    "Use **Quality-check each answer** in the sidebar to have every answer graded."],
+                    "Use **Quality-check each answer** in the sidebar to have every answer graded.",
+                    "Your conversations are saved to your account: reopen, rename or delete them under "
+                    "**My conversations** in the sidebar."],
             icon=":material/smart_toy:")
 
 if not ss.chat:

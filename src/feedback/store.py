@@ -4,7 +4,7 @@ SQLite store for analyst feedback on assistant answers.
 One row per rated turn (thread_id + turn_id); rating the same turn again updates it.
 Each row keeps what the analyst said (rating, comment, corrected attack label) and a
 snapshot of the turn taken from the conversation store (question, answer, route, model
-prediction, incident / flow, input quality, judge verdict, LLM model), so feedback can be
+prediction, incident / flow, input quality, judge verdict, LLM model) and who rated it, so feedback can be
 analysed and used for retraining later without the conversation.
 """
 import json
@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS feedback (
     judge_verdict         TEXT,
     judge_overall         REAL,
     llm_model             TEXT,
+    username              TEXT,
     UNIQUE (thread_id, turn_id)
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_incident ON feedback (incident_id);
@@ -47,7 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback (created_at);
 JSON_COLUMNS = ("agents_run", "flow_args")
 SNAPSHOT_COLUMNS = (
     "question", "answer", "route", "agents_run", "predicted_label", "prediction_confidence", "incident_id",
-    "historical_label", "flow_args", "input_quality", "judge_verdict", "judge_overall", "llm_model",
+    "historical_label", "flow_args", "input_quality", "judge_verdict", "judge_overall", "llm_model", "username",
 )
 RATINGS = ("up", "down")
 
@@ -67,6 +68,9 @@ class FeedbackStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(SCHEMA)
+            columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(feedback)")}
+            if "username" not in columns:  # databases created before user accounts
+                self._conn.execute("ALTER TABLE feedback ADD COLUMN username TEXT")
             self._conn.commit()
 
     def close(self) -> None:

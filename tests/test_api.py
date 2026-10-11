@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from agents.graph import Assistant
 from agents.guardrails import BLOCKED_REPLIES, MAX_INPUT_CHARS
 from api.main import create_app
+from auth_utils import SignedInClient
 from test_agents import FakeLLM, route, text, tool_call
 
 FULL_FLOW = {
@@ -23,7 +24,7 @@ FULL_FLOW = {
 
 def make_client(llm=None, **kwargs) -> TestClient:
     assistant = Assistant(llm=llm or FakeLLM())
-    return TestClient(create_app(assistant=assistant, load_search_index=False), **kwargs)
+    return SignedInClient(create_app(assistant=assistant, load_search_index=False), **kwargs)
 
 
 @pytest.fixture
@@ -134,7 +135,7 @@ def test_chat_validation(client, payload):
 
 def test_chat_without_llm_returns_503():
     app = create_app(load_search_index=False)
-    with TestClient(app) as c:
+    with SignedInClient(app) as c:
         app.state.services.assistant, app.state.services.assistant_error = None, "No LLM API key configured."
         r = c.post("/chat", json={"message": "hello"})
         assert r.status_code == 503 and "No LLM API key" in r.json()["detail"]

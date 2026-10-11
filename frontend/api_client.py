@@ -4,6 +4,8 @@ this module: no agent, ML or retrieval code runs in the Streamlit process.
 
     client = ApiClient()                      # API_BASE_URL env var, default http://localhost:8000
     client.health()
+    session = client.login("analyst1", "...")
+    client = client.with_token(session["token"])   # signed in: chat, conversations, feedback
     for kind, data in client.chat_stream("Investigate INC-000035"):
         ...                                   # ("trace", event) ... ("result", response)
 
@@ -20,9 +22,12 @@ DEFAULT_TIMEOUT = 30.0
 CHAT_TIMEOUT = 600.0  # an investigation runs several agents and LLM calls
 
 STATUS_MESSAGES = {
+    401: "Not signed in",
     404: "Not found",
+    409: "Already exists",
     413: "The file is too large",
     422: "Invalid input",
+    429: "Too many attempts",
     502: "The language model provider returned an error",
     503: "The service is not available",
 }
@@ -86,14 +91,23 @@ def parse_sse(lines: Iterable[str]) -> Iterator[Tuple[str, Dict[str, Any]]]:
 
 class ApiClient:
     def __init__(self, url: Optional[str] = None, client: Optional[httpx.Client] = None,
-                 timeout: float = DEFAULT_TIMEOUT):
+                 timeout: float = DEFAULT_TIMEOUT, token: Optional[str] = None):
         self.url = (url or base_url()).rstrip("/")
         self._client = client or httpx.Client(base_url=self.url, timeout=timeout)
+        self.token = token
+
+    def with_token(self, token: Optional[str]) -> "ApiClient":
+        """A client for one signed-in user that shares this client's connection pool."""
+        return ApiClient(self.url, client=self._client, token=token)
+
+    def _headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
     # ------------------------------------------------------------------ core
     def _request(self, method: str, path: str, timeout: Optional[float] = None, **kwargs) -> httpx.Response:
         if timeout is not None:
             kwargs["timeout"] = timeout
+        kwargs["headers"] = {**self._headers(), **kwargs.get("headers", {})}
         try:
             response = self._client.request(method, path, **kwargs)
         except httpx.TimeoutException:
@@ -111,6 +125,19 @@ class ApiClient:
     # ---------------------------------------------------------------- system
     def health(self) -> Dict[str, Any]:
         return self._json("GET", "/health", timeout=10)
+
+    # -------------------------------------------------------------- accounts
+    def signup(self, username: str, password: str) -> Dict[str, Any]:
+        return self._json("POST", "/auth/signup", json={"username": username, "password": password})
+
+    def login(self, username: str, password: str) -> Dict[str, Any]:
+        return self._json("POST", "/auth/login", json={"username": username, "password": password})
+
+    def logout(self) -> None:
+        self._request("POST", "/auth/logout")
+
+    def me(self) -> Dict[str, Any]:
+        return self._json("GET", "/auth/me")
 
     # ------------------------------------------------------------------ chat
     @staticmethod
@@ -133,7 +160,8 @@ class ApiClient:
         """
         body = self._chat_body(message, thread_id, judge)
         try:
-            with self._client.stream("POST", "/chat/stream", json=body, timeout=CHAT_TIMEOUT) as response:
+            with self._client.stream("POST", "/chat/stream", json=body, headers=self._headers(),
+                                     timeout=CHAT_TIMEOUT) as response:
                 if response.status_code >= 400:
                     response.read()
                     raise ApiError(response.status_code, error_detail(response))
@@ -152,6 +180,12 @@ class ApiClient:
 
     def delete_thread(self, thread_id: str) -> None:
         self._request("DELETE", f"/chat/{thread_id}")
+
+    def conversations(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/chat/conversations")
+
+    def rename_thread(self, thread_id: str, title: str) -> Dict[str, Any]:
+        return self._json("PATCH", f"/chat/{thread_id}", json={"title": title})
 
     # -------------------------------------------------------------------- ML
     def explain(self, flow: Dict[str, Any]) -> Dict[str, Any]:

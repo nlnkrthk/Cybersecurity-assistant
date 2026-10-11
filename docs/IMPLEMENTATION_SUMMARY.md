@@ -135,6 +135,7 @@ checkout location.
 | `ATTACK_PROFILES_FILE` | `attack_type_profiles.json`: SHAP-based traffic profile of each attack type |
 | `ML_MODEL_VERSIONS_DIR`, `ACTIVE_CLASSIFIER_POINTER` | Retrained classifier versions and the pointer to the active one (`ml/models/versions/`, git-ignored) |
 | `FEEDBACK_DB_FILE`, `CLEANED_FLOWS_FILE` | Feedback database; training table used for retraining |
+| `AUTH_DB_FILE`, `CHAT_DB_FILE`, `SESSION_TTL_HOURS` | User accounts database, saved conversations (LangGraph checkpoints), login lifetime (7 days) |
 
 Runtime settings come from `.env` (never committed):
 
@@ -149,6 +150,7 @@ Runtime settings come from `.env` (never committed):
 | `JUDGE_PROVIDER`, `JUDGE_MODEL` | Optional separate model for LLM-as-Judge (default: the main LLM) |
 | `JUDGE_MODE` | `on` judges every assistant answer by default; `off` (default) only on request |
 | `FEEDBACK_DB_PATH` | Optional location of the feedback database (default `data/feedback/feedback.db`) |
+| `AUTH_DB_PATH`, `CHAT_DB_PATH` | Optional locations of the accounts database and the saved conversations (default `data/app/users.db`, `data/app/checkpoints.db`) |
 | `API_CORS_ORIGINS` | Allowed browser origins for the API (default: Streamlit on port 8501) |
 
 Sampling targets:
@@ -1124,23 +1126,28 @@ example request on every endpoint).
 
 | Method & path | Uses LLM | Purpose |
 |---|---|---|
-| `POST /chat` | yes | `{message, thread_id?, judge?}` → answer, route, agents run, follow-up flag, findings, evidence, trace, guardrails, `judgement` (when judged), `elapsed_ms` |
-| `POST /chat/stream` | yes | Same, as Server-Sent Events: `event: trace` per step, then `event: result`; `event: error` if the run fails; `X-Thread-ID` header |
-| `GET /chat/{thread_id}/history` | no | The conversation's messages |
-| `DELETE /chat/{thread_id}` | no | Deletes the conversation |
+| `POST /auth/signup`, `POST /auth/login` | no | `{username, password}` → bearer `token`, `expires_at`, `user` (§19.4) |
+| `POST /auth/logout`, `GET /auth/me` | no | Revoke the token; the signed-in user |
+| `POST /chat` 🔒 | yes | `{message, thread_id?, judge?}` → answer, route, agents run, follow-up flag, findings, evidence, trace, guardrails, `judgement` (when judged), `elapsed_ms` |
+| `POST /chat/stream` 🔒 | yes | Same, as Server-Sent Events: `event: trace` per step, then `event: result`; `event: error` if the run fails; `X-Thread-ID` header |
+| `GET /chat/conversations` 🔒 | no | Your saved conversations (title, created, last used), newest first |
+| `GET /chat/{thread_id}/history` 🔒 | no | The conversation's messages |
+| `PATCH /chat/{thread_id}` 🔒 | no | Rename the conversation |
+| `DELETE /chat/{thread_id}` 🔒 | no | Deletes the conversation |
 | `POST /ml/classify`, `/ml/risk`, `/ml/explain`, `/ml/prioritize` | no | One flow: any subset of metrics (units allowed) or an `incident_id` |
 | `POST /ml/prioritize/batch` | no | Up to 1,000 flows and/or incident IDs; ranked top `top_n` with counts per priority |
 | `POST /ml/prioritize/csv` | no | CSV upload (≤ 5 MB, ≤ 1,000 rows); columns matched by feature name, alias or raw header, plus `incident_id`; unknown columns ignored |
 | `POST /search` | no | Hybrid retrieval with optional `attack_type`, `dst_port`, `top_k` ≤ 20 |
 | `GET /incidents/{id}` | no | Stored metrics, historical label, port |
 | `GET /attack-types`, `GET /attack-types/{name}` | no | List with severity; one attack type's profile |
-| `POST /judge` | yes | LLM-as-Judge for a conversation's latest answer (`thread_id`) or any question + answer (§17) |
-| `POST /feedback` | no | Rate a turn (`thread_id`, optional `turn_id`, `rating`, `comment`, `corrected_label`) (§18) |
+| `POST /judge` | yes | LLM-as-Judge for a conversation's latest answer (`thread_id`, 🔒 owner only) or any question + answer (§17) |
+| `POST /feedback` 🔒 | no | Rate a turn (`thread_id`, optional `turn_id`, `rating`, `comment`, `corrected_label`) (§18) |
 | `GET /feedback`, `GET /feedback/stats`, `GET /feedback/export.csv` | no | List feedback, statistics, corrections CSV for retraining |
 | `GET /health` | no | ML models loaded, number of attack types, active classifier version, assistant ready (or why not), `provider:model`, search-index state, package versions |
 
-The direct endpoints call the same functions as the agent tools, so the API and the chat always
-agree.
+🔒 = needs `Authorization: Bearer <token>`, and a conversation can only be used by the user who
+started it. The direct endpoints call the same functions as the agent tools, so the API and the
+chat always agree.
 
 ### 19.2 Behaviour
 
@@ -1150,6 +1157,10 @@ agree.
   |---|---|
   | Key metrics missing | 200 with `"status": "needs_follow_up"` and the question |
   | Message blocked by the input guard | 200 with `route: "blocked"` and the fixed reply |
+  | No, expired or revoked token on a 🔒 endpoint; wrong password | 401 |
+  | Another user's conversation | 404 (same as an unknown one, so IDs cannot be probed) |
+  | Username already taken | 409 |
+  | 5 failed logins for a username within 5 minutes | 429 with `Retry-After` |
   | Invalid or impossible input | 422 with the validation message |
   | Unknown incident or attack type | 404 |
   | CSV over 5 MB | 413 |
@@ -1169,19 +1180,48 @@ agree.
   request is logged with method, path, status and time.
 - **CORS:** only the Streamlit origins (`localhost:8501`, `127.0.0.1:8501`) by default, configurable
   with `API_CORS_ORIGINS`.
-- **No authentication:** the API binds to `127.0.0.1` and is meant for local use, per the project
-  constraints.
-- Conversations live in memory and are lost on restart.
+- **Accounts:** the assistant, conversation and feedback endpoints need a signed-in user; the ML,
+  search and health endpoints stay open (§19.4). The API binds to `127.0.0.1` by default.
+- **Saved conversations:** stored in SQLite by LangGraph's `SqliteSaver`, so they survive restarts.
 
 ### 19.3 Files
 
 | File | Contents |
 |---|---|
-| `src/api/main.py` | `create_app(assistant=None, load_search_index=True)`, lifespan, CORS, request-ID middleware, 500 handler; module-level `app` |
+| `src/api/main.py` | `create_app(assistant=None, load_search_index=True, auth_store=None)`, lifespan, CORS, request-ID middleware, 500 handler; module-level `app` |
 | `src/api/schemas.py` | Request and response models (flow inputs reuse the tools' `FlowArgs`) |
-| `src/api/deps.py` | `AppState` (assistant, ML service, index state, per-thread locks), `tool_response()` (tool error → HTTP code) |
-| `src/api/routes/chat.py`, `judge.py`, `feedback.py`, `ml.py`, `search.py`, `system.py` | The endpoints |
+| `src/api/deps.py` | `AppState` (assistant, ML service, account store, login limiter, index state, per-thread locks), `get_current_user` / `get_optional_user`, `require_conversation_owner`, `tool_response()` (tool error → HTTP code) |
+| `src/api/routes/auth.py`, `chat.py`, `judge.py`, `feedback.py`, `ml.py`, `search.py`, `system.py` | The endpoints |
+| `src/auth/` | `security.py` (scrypt hashing, tokens, input rules, `LoginLimiter`), `store.py` (`AuthStore`: users, sessions, conversation owners), `__init__.py` (paths, `open_checkpointer`) |
 | `scripts/api/run_api.py` | Uvicorn launcher |
+
+### 19.4 Accounts and saved conversations
+
+Each user signs up with a username and password and gets their own saved conversations.
+
+- **Passwords:** `hashlib.scrypt` (N=2¹⁴, r=8, p=1) with a random 16-byte salt per user, stored as
+  `scrypt$N$r$p$salt$hash` so the cost can be raised later. No new dependency. Usernames: 3–32
+  letters, digits, `.`, `_`, `-`, not case-sensitive. Passwords: 8–128 characters.
+- **Tokens:** a random `secrets.token_urlsafe(32)` per login. Only its SHA-256 digest is stored, so
+  a copy of the database cannot be used to sign in. Tokens expire after 7 days and logging out
+  deletes them, so they can be revoked (unlike stateless JWTs).
+- **Login protection:** the same message for an unknown username and a wrong password, the same
+  hashing work in both cases (a dummy hash is checked), and 5 failures per username in 5 minutes
+  lock it for the rest of the window (429).
+- **Ownership:** table `conversations (thread_id, user_id, title, created_at, updated_at)`. A new
+  chat is claimed by its user before the first turn runs; every conversation endpoint (history,
+  continue, rename, delete, feedback, judge by `thread_id`) checks the owner and answers 404
+  otherwise. A client-chosen new `thread_id` is accepted only if nobody has used it.
+- **Titles:** the first question **after** the input guard's redaction (so a password typed in
+  the first message never becomes a title), cut at 80 characters; renamable.
+- **Persistence:** conversation state (messages, findings, evidence, turn history) is stored by
+  LangGraph's `SqliteSaver` in `data/app/checkpoints.db`; accounts in `data/app/users.db`. Both
+  are git-ignored. Tests use temporary databases and the in-memory saver.
+- **Feedback:** each rating records the username, so the dashboard and exports show who rated.
+- **Limits (local-app security):** no HTTPS (the API listens on localhost), no email
+  verification or password reset, no roles; every signed-in user sees the shared feedback
+  dashboard. The Streamlit session holds the token, so closing the tab or a hard refresh signs
+  out (the saved conversations remain).
 
 ---
 
@@ -1205,13 +1245,14 @@ for the anomaly score, "Why the models decided this" for SHAP), with tooltips on
 
 | Page | What it does | API |
 |---|---|---|
+| Sign in | Shown instead of the app until signed in: **Sign in** and **Create account** tabs (repeat-password check), clear error messages, notice when a session expired | `/auth/login`, `/auth/signup` |
 | Home | One card per tool: what it does, when to use it, an Open button; priority legend; how the assistant works | `/health` |
-| AI Assistant | Chat with a live **progress tracker** (20.2); example questions as cards; each answer shows the question type and agents used, safety notices (blocked, secrets removed, answer adjusted), the quality check (verdict, five scores with explanations, unsupported statements), **How this answer was produced** (the finished tracker) and **Data used** (tool results). "Was this helpful?" 👍/👎 plus a form for a comment and an attack-type correction (only when the turn analysed a flow or incident). Sidebar **Chat settings**: New conversation, Quality-check each answer, earlier conversations | `/chat/stream` (falls back to `/chat`), `/chat/{id}/history`, `/feedback` |
+| AI Assistant | Chat with a live **progress tracker** (20.2); example questions as cards; each answer shows the question type and agents used, safety notices (blocked, secrets removed, answer adjusted), the quality check (verdict, five scores with explanations, unsupported statements), **How this answer was produced** (the finished tracker) and **Data used** (tool results). "Was this helpful?" 👍/👎 plus a form for a comment and an attack-type correction (only when the turn analysed a flow or incident). Sidebar **Chat settings**: New conversation, Quality-check each answer; **My conversations**: open any saved conversation, rename or delete it | `/chat/stream` (falls back to `/chat`), `/chat/conversations`, `/chat/{id}/history`, `PATCH`/`DELETE /chat/{id}`, `/feedback` |
 | Flow Analysis | Tabs: historical incident (with an example per attack type) or flow metrics (5 essential fields, 19 optional ones folded away, "load values from an incident"). Result: coloured **verdict banner** (attack, priority, recommended action), attack type / intrusion risk / unusualness / priority cards, rule and input-quality notes, SHAP charts side by side, most unusual metrics | `/ml/explain`, `/incidents/{id}` |
 | Incident Search | Search with attack-type and port filters and numeric conditions; applied filters shown as chips; select a row for the incident's metrics and analyst corrections, then **Analyse this incident**. Attack-type profiles: attack vs normal medians | `/search`, `/incidents/{id}`, `/attack-types`, `/attack-types/{name}` |
 | Triage Queue | Priority legend; upload a CSV (sample provided) or paste incident IDs → counts per priority, chart, colour-coded ranking with urgency bars, flows that need data, CSV download | `/ml/prioritize/csv`, `/ml/prioritize/batch` |
 | Quality & Feedback | Grade the latest conversation answer (with its data) or a pasted one. Analyst feedback: ratings, approval per question type, checker-vs-analyst agreement, top corrections, comments, filterable table, corrections CSV for retraining | `/judge`, `/feedback/stats`, `/feedback`, `/feedback/export.csv` |
-| Sidebar (all pages) | System status: backend API, AI model, incident search index, attack classifier version, with coloured dots; Refresh / Retry | `/health` |
+| Sidebar (all pages) | **Account**: signed-in user and Log out (revokes the token, clears the session). System status: backend API, AI model, incident search index, attack classifier version, with coloured dots; Refresh / Retry | `/health` |
 
 ### 20.2 Agent progress tracker
 
@@ -1391,9 +1432,13 @@ cleaned flows, one flow per class, a full flow and the ML service). Run with
 | `test_llm_config.py` | 13 | Provider selection, defaults, missing keys, rate limiter, `LLMClient` following `LLM_PROVIDER` |
 | `test_judge.py` | 42 | Verdict rules, applicable criteria, judge input and trimming, JSON parsing and fallback, provider errors, rule caps, graph node (on request, `JUDGE_MODE`, skipped turns, failures), `judge_last_turn`, `/chat` and `/judge` endpoints |
 | `test_feedback.py` | 23 | Store (upsert, filters, corrections, stats and judge agreement), snapshots (incl. an incident identified only by its copied metrics), recording real turns and earlier turns, label validation, `analyst_feedback` in tools, API endpoints and CSV export, correction collection (majority, ties, skipped flows), retraining comparison and promotion guard (synthetic data), active-version pointer, `activate`/`list_versions` |
-| `test_frontend.py` | 29 | API client against the real app (health, explain, follow-up, 404/422, batch and CSV ranking, chat stream → feedback → stats → export → history → delete, stream error event, unreachable API), SSE parsing, error messages, flow fields = model features, example incidents carry their labels, formatting helpers, progress tracker (live, finished, blocked, follow-up, judge, HTML escaping), every page rendered with Streamlit's `AppTest` while the API is down |
+| `test_auth.py` | 26 | Password hashing and verification, token digests, username and password rules, login limiter (window, case, reset), account store (case-insensitive users, sessions that expire and are revoked, digest-only storage, conversation claim / title / rename / order / delete), `/auth` endpoints (signup, login, logout, me, 409/422, generic 401, 429), every protected endpoint without a token, conversations listed / titled / renamed / deleted, titles never contain a redacted secret, other users get 404 on history, continue, stream, rename, delete, feedback and judge, client-chosen IDs claimed once, conversations surviving an API restart, tool evidence and earlier turns through the SQLite checkpointer |
+| `test_frontend.py` | 34 | Accounts and saved conversations through the client (401 when signed out, separate tokens on a shared pool, signup / login / logout, list / rename / delete), sign-in page shown alone until signed in, repeat-password check, Log out; API client against the real app (health, explain, follow-up, 404/422, batch and CSV ranking, chat stream → feedback → stats → export → history → delete, stream error event, unreachable API), SSE parsing, error messages, flow fields = model features, example incidents carry their labels, formatting helpers, progress tracker (live, finished, blocked, follow-up, judge, HTML escaping), every page rendered with Streamlit's `AppTest` while the API is down |
 | `test_deepeval.py` | 16 | Case file valid and consistent with the data (labels, priorities, ranking), unknown keys rejected, evidence → context, every deterministic check passing and failing (incl. typographic dashes), applicable metrics per route, evaluator JSON parsing with one retry, `measure` never raising, resumable generate (failed cases retried) and score, report numbers, Markdown and CSV |
-| **Total** | **372** | All passing (about 1–2 minutes). `pytest.ini` disables DeepEval's pytest plugin, which would otherwise hook every test session |
+| **Total** | **403** | All passing (about 1–2 minutes). `pytest.ini` disables DeepEval's pytest plugin, which would otherwise hook every test session |
+
+API tests sign in as a fresh throwaway user (`tests/auth_utils.SignedInClient`); `conftest.py`
+points the feedback, accounts and conversation databases at temporary files.
 
 Graph and API tests use a scripted **fake LLM** (separate queues for router decisions, agent
 replies and final answers). Tests are fast, free, repeatable and need no API key, and they can
@@ -1463,7 +1508,7 @@ message answered in 6 ms; `/chat/stream` delivered `trace` then `result` events;
 upload ranked an incident (P2) and a new flow (P4); unknown incident → 404; `/chat` with an
 exhausted provider account → 502 with the provider's message.
 
-**Test suite:** 372 tests pass (§22).
+**Test suite:** 403 tests pass (§22).
 
 ### 23.2 Front end (2026-10-10, gpt-oss-20b via NVIDIA NIM)
 
@@ -1491,7 +1536,8 @@ on three runs with the new rules; the old rules sent the DDoS question to `gener
 - Partial input biases predictions towards BENIGN; this is stated in every such answer.
 - Without the attack-type filter, search can mix SSH and web brute force; the agents set the
   filter when the type is known.
-- Conversation memory is in memory only (lost on restart).
+- Accounts are local-app security only: no HTTPS, password reset or roles (§19.4); a browser
+  refresh signs the user out of the front end.
 - The dataset release has no protocol, IP or timestamp values, so those filters have no data.
 - The risk model relies partly on `init_win_bytes_forward`, a dataset artifact (§9.3).
 - Free LLM tiers (Gemini 20 requests/day, NIM queueing) are too small for regular use or
@@ -1616,6 +1662,10 @@ Bugs found and fixed while building the ML, services, agents and API:
     (faithfulness, relevance, recommendations, safety); facts known from the data (route, label,
     priority, filters, guardrails) are checked exactly, so a noisy small evaluator cannot hide or
     invent a factual error. Answers are generated once and stored, so metrics can be re-run.
+23. **Accounts with opaque, revocable tokens.** Standard-library scrypt and SQLite keep the
+    dependencies unchanged; storing only token digests means a leaked database cannot be used to
+    sign in, and logout really ends a session. Ownership is checked on the server for every
+    conversation call, and other users' conversations look exactly like missing ones.
 
 ---
 
@@ -1648,6 +1698,8 @@ Against `project_guidelines/Project 8 - AI-Powered Cybersecurity Incident Respon
 | Explainable feature analysis | ✅ SHAP per prediction and per attack type (§9, §10.2) |
 | Feedback loop | ✅ Ratings and label corrections (chat, API), stats with judge-vs-analyst agreement, corrections shown in later answers, guarded classifier retraining with versioning (§18) |
 | Front end | ✅ Streamlit app on top of the API (home page, top navigation, plain-language help on every page, live agent progress tracker): assistant chat with live trace, judge and feedback; flow analyzer with SHAP charts; incident search and profiles; triage queue; answer-quality dashboard (§20) |
+
+Beyond the brief: user accounts with saved, per-user conversations (§19.4).
 
 ### Next steps
 

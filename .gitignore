@@ -132,6 +132,9 @@ data/evaluation/
 data/feedback/
 ml/models/versions/
 
+# User accounts and saved conversations (generated, contain password hashes)
+data/app/
+
 # DeepEval: cache folder; the labelled case set is committed
 .deepeval/
 !src/evaluation/cases/*.json

@@ -5,7 +5,6 @@ import json
 from collections import deque
 
 import pytest
-from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from agents.graph import Assistant
@@ -17,6 +16,7 @@ from agents.judge import (
     should_judge,
     summarize,
 )
+from auth_utils import SignedInClient
 from test_agents import FakeLLM, route, text, tool_call
 
 
@@ -328,7 +328,7 @@ def test_judge_settings_default_to_main_llm_and_can_differ(monkeypatch):
 def make_client(llm, judge):
     from api.main import create_app
 
-    return TestClient(create_app(assistant=Assistant(llm=llm, judge_llm=judge), load_search_index=False))
+    return SignedInClient(create_app(assistant=Assistant(llm=llm, judge_llm=judge), load_search_index=False))
 
 
 def test_api_chat_with_judge():

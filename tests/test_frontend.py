@@ -16,6 +16,7 @@ from api_client import ApiClient, ApiError, error_detail, parse_sse  # noqa: E40
 
 from agents.graph import Assistant  # noqa: E402
 from api.main import create_app  # noqa: E402
+from auth_utils import SignedInClient  # noqa: E402
 from services.feature_input import FEATURE_NAMES  # noqa: E402
 from test_agents import FakeLLM, route, text, tool_call  # noqa: E402
 
@@ -24,7 +25,7 @@ pytestmark = pytest.mark.filterwarnings("ignore:You should not use the 'timeout'
 
 
 def make_api(llm=None) -> TestClient:
-    return TestClient(create_app(assistant=Assistant(llm=llm or FakeLLM()), load_search_index=False))
+    return SignedInClient(create_app(assistant=Assistant(llm=llm or FakeLLM()), load_search_index=False))
 
 
 @pytest.fixture
@@ -77,6 +78,40 @@ def test_unreachable_api_raises_api_error_without_status():
 # ============================================================================
 # API client against the real app
 # ============================================================================
+def test_accounts_and_saved_conversations_through_the_client():
+    llm = FakeLLM(routes=[route("general"), route("general")], final_replies=["Hello!", "Hi again"])
+    with TestClient(create_app(assistant=Assistant(llm=llm), load_search_index=False)) as test_client:
+        anonymous = ApiClient(url="http://testserver", client=test_client)
+        with pytest.raises(ApiError) as info:
+            anonymous.chat("hello")
+        assert info.value.status == 401 and info.value.message.startswith("Not signed in")
+
+        session = anonymous.signup("frontend_user", "a-long-password")
+        api = anonymous.with_token(session["token"])
+        assert anonymous.token is None and api._client is anonymous._client  # shared pool, separate token
+        assert api.me()["username"] == "frontend_user"
+
+        first = api.chat("hello there")["thread_id"]
+        second = next(d for k, d in api.chat_stream("second question") if k == "result")["thread_id"]
+        assert [c["thread_id"] for c in api.conversations()] == [second, first]
+        assert api.rename_thread(first, "Renamed")["title"] == "Renamed"
+        api.delete_thread(second)
+        assert [c["title"] for c in api.conversations()] == ["Renamed"]
+
+        with pytest.raises(ApiError) as info:
+            anonymous.signup("FRONTEND_USER", "a-long-password")
+        assert info.value.status == 409
+        with pytest.raises(ApiError) as info:
+            anonymous.login("frontend_user", "wrong-password")
+        assert info.value.status == 401 and info.value.detail == "Wrong username or password."
+        assert anonymous.login("frontend_user", "a-long-password")["user"]["username"] == "frontend_user"
+
+        api.logout()
+        with pytest.raises(ApiError) as info:
+            api.conversations()
+        assert info.value.status == 401
+
+
 def test_health_and_attack_types(api):
     assert api.health()["assistant_ready"] is True
     types = api.attack_types()
@@ -285,8 +320,9 @@ def test_shap_rows_sorted_by_strength():
 # ============================================================================
 # Streamlit pages (API not running: pages must show errors, not crash)
 # ============================================================================
-@pytest.mark.parametrize("page", ["app.py", "views/home.py", "views/assistant.py", "views/flow_analyzer.py",
-                                  "views/incident_search.py", "views/triage_queue.py", "views/answer_quality.py"])
+@pytest.mark.parametrize("page", ["app.py", "views/login.py", "views/home.py", "views/assistant.py",
+                                  "views/flow_analyzer.py", "views/incident_search.py", "views/triage_queue.py",
+                                  "views/answer_quality.py"])
 def test_pages_render_without_api(page, monkeypatch):
     from streamlit.testing.v1 import AppTest
 
@@ -299,3 +335,51 @@ def test_pages_render_without_api(page, monkeypatch):
     app = AppTest.from_file(str(FRONTEND / page), default_timeout=30)
     app.run()
     assert not app.exception, app.exception
+
+
+def _app_test(monkeypatch, page="app.py"):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("API_BASE_URL", "http://127.0.0.1:9")
+    import components
+
+    components.get_client.clear()
+    components.health.clear()
+    return AppTest.from_file(str(FRONTEND / page), default_timeout=30)
+
+
+def test_app_shows_only_sign_in_until_signed_in(monkeypatch):
+    app = _app_test(monkeypatch)
+    app.run()
+    assert not app.exception
+    assert [t.label for t in app.tabs] == ["Sign in", "Create account"]
+    assert not any(b.label == "Log out" for b in app.button)
+
+    app.text_input[0].input("someone")
+    app.text_input[1].input("a-long-password")
+    app.button[0].click().run()  # API unreachable: an error, still on the sign-in page
+    assert any("Cannot reach the API" in e.value for e in app.error)
+    assert "auth_token" not in app.session_state
+
+
+def test_sign_up_checks_the_repeated_password(monkeypatch):
+    app = _app_test(monkeypatch)
+    app.run()
+    app.text_input[2].input("someone")
+    app.text_input[3].input("a-long-password")
+    app.text_input[4].input("another-password")
+    app.button[1].click().run()
+    assert any("do not match" in e.value for e in app.error)
+
+
+def test_signed_in_session_shows_the_app_and_logs_out(monkeypatch):
+    app = _app_test(monkeypatch)
+    app.session_state["auth_token"] = "token"
+    app.session_state["auth_user"] = {"id": 1, "username": "analyst_1", "created_at": "now"}
+    app.run()
+    assert not app.exception
+    assert any("Signed in as" in m.value and "analyst" in m.value for m in app.sidebar.markdown)
+    logout = next(b for b in app.button if b.label == "Log out")
+    logout.click().run()
+    assert "auth_user" not in app.session_state and "auth_token" not in app.session_state
+    assert [t.label for t in app.tabs] == ["Sign in", "Create account"]

@@ -4,7 +4,8 @@ Streamlit front end of the Cybersecurity Incident Response Assistant.
     python scripts/frontend/run_frontend.py      (or: streamlit run frontend/app.py from the project root)
 
 A thin client: every page calls the FastAPI backend (API_BASE_URL, default
-http://localhost:8000) through api_client.py.
+http://localhost:8000) through api_client.py. Only the sign-in page is shown until the user
+is signed in; their conversations are then loaded from the API.
 """
 import sys
 from pathlib import Path
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import streamlit as st  # noqa: E402
 
-from components import inject_styles, status_sidebar  # noqa: E402
+from components import account_sidebar, current_user, inject_styles, status_sidebar  # noqa: E402
 
 st.set_page_config(page_title="Incident Response Assistant", page_icon=":material/shield:", layout="wide")
 
@@ -27,11 +28,15 @@ PAGES = [
     st.Page(VIEWS / "answer_quality.py", title="Quality & Feedback", icon=":material/fact_check:"),
 ]
 
+LOGIN = st.Page(VIEWS / "login.py", title="Sign in", icon=":material/login:")
+
 inject_styles()
-navigation = st.navigation(PAGES, position="top")
+signed_in = current_user() is not None
+navigation = st.navigation(PAGES if signed_in else [LOGIN], position="top" if signed_in else "hidden")
 with st.sidebar:
     st.markdown("### :material/shield: Incident Response")
     st.caption("AI-assisted investigation of network security incidents (CIC-IDS2017).")
     st.divider()
+account_sidebar()
 status_sidebar()
 navigation.run()

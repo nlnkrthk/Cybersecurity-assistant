@@ -27,6 +27,39 @@ FLOW_EXAMPLES = [
 
 
 # ============================================================================
+# Accounts
+# ============================================================================
+class Credentials(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"username": "analyst1", "password": "a long passphrase"}]})
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    created_at: str
+
+
+class SessionResponse(BaseModel):
+    token: str = Field(description="Send as 'Authorization: Bearer <token>'.")
+    expires_at: str
+    user: UserResponse
+
+
+class ConversationSummary(BaseModel):
+    thread_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+# ============================================================================
 # Chat
 # ============================================================================
 class ChatRequest(BaseModel):

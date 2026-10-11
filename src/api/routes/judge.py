@@ -1,12 +1,12 @@
 """
 LLM-as-Judge endpoint: grade an answer against the evidence it was written from.
 """
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from agents.judge import judge_answer
-from api.deps import get_assistant
+from api.deps import AppState, get_assistant, get_current_user, get_optional_user, get_state, require_conversation_owner
 from api.routes.chat import is_llm_provider_error, llm_error_detail
 from api.schemas import JudgeRequest, JudgeResponse
 
@@ -24,13 +24,17 @@ def _judge_model_name() -> str:
 
 
 @router.post("/judge", response_model=JudgeResponse, summary="Grade an answer (LLM-as-Judge)")
-def judge(body: JudgeRequest, assistant=Depends(get_assistant)) -> Dict[str, Any]:
+def judge(body: JudgeRequest, user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+          assistant=Depends(get_assistant), state: AppState = Depends(get_state)) -> Dict[str, Any]:
     """Score an answer 1-5 on faithfulness, correctness, relevance, actionability and safety,
     list unsupported claims, and give a verdict (pass / needs_review / fail).
 
     Send a `thread_id` to grade that conversation's latest answer with its real evidence, or a
     `question` + `answer` (optionally with `findings` and `evidence`) to grade any answer.
+    Grading a conversation needs its owner to be signed in.
     """
+    if body.thread_id:
+        require_conversation_owner(state, body.thread_id, get_current_user(user))
     try:
         if body.thread_id:
             try:

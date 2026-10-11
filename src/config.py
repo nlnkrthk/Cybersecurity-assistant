@@ -265,3 +265,11 @@ CLEANED_FLOWS_FILE = PROJECT_ROOT / "data" / "cleaned_network_data" / "cleaned_n
 # Analyst feedback (SQLite; FEEDBACK_DB_PATH in the environment overrides the location)
 # ============================================================================
 FEEDBACK_DB_FILE = PROJECT_ROOT / "data" / "feedback" / "feedback.db"
+
+# ============================================================================
+# User accounts and saved conversations (SQLite; AUTH_DB_PATH / CHAT_DB_PATH override)
+# ============================================================================
+APP_DATA_DIR = PROJECT_ROOT / "data" / "app"
+AUTH_DB_FILE = APP_DATA_DIR / "users.db"
+CHAT_DB_FILE = APP_DATA_DIR / "checkpoints.db"
+SESSION_TTL_HOURS = 24 * 7

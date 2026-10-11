@@ -16,6 +16,10 @@ os.environ["JUDGE_MODE"] = "off"
 import tempfile  # noqa: E402
 
 os.environ["FEEDBACK_DB_PATH"] = str(Path(tempfile.mkdtemp(prefix="feedback_tests_")) / "feedback.db")
+# Accounts and saved conversations likewise never touch data/app/.
+_APP_TMP = Path(tempfile.mkdtemp(prefix="app_tests_"))
+os.environ["AUTH_DB_PATH"] = str(_APP_TMP / "users.db")
+os.environ["CHAT_DB_PATH"] = str(_APP_TMP / "checkpoints.db")
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
