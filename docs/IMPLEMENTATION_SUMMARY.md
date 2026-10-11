@@ -1703,5 +1703,7 @@ Beyond the brief: user accounts with saved, per-user conversations (§19.4).
 
 ### Next steps
 
-1. Remaining deliverables: design write-up and presentation. Done: README (rewritten for the full system) and architecture and workflow diagrams (`docs/ARCHITECTURE.md`, `docs/diagrams/`).
+1. Remaining deliverable: the presentation. Done: README, architecture and workflow diagrams (`docs/ARCHITECTURE.md`, `docs/diagrams/`) and the design document (`design/Design_Document.pdf`, built from `design/Design_Document.md`).
+
+Retrieval evaluation (2026-10-11, 12 labelled queries, top 5, no filters): BM25 Hit@5 0.583 / Precision@5 0.567 / MRR 0.583; vector 0.833 / 0.833 / 0.833; RRF 0.917 / 0.733 / 0.792.
 2. Optional: a stronger evaluator model for DeepEval when a new provider key is available.

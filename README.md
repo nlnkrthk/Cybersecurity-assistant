@@ -348,6 +348,9 @@ Cybersecurity-assistant/
 
 ## Documentation
 
+- [design/Design_Document.pdf](design/Design_Document.pdf): design document (problem, architecture,
+  technology choices, retrieval strategy, agent design, evaluation, trade-offs); source in
+  `design/Design_Document.md`, rebuilt with `python design/build_pdf.py`
 - [docs/IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md): every component, test
   coverage, verified results, fix log and design decisions
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): architecture and workflow diagrams with explanations
