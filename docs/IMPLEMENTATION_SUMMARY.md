@@ -1703,5 +1703,5 @@ Beyond the brief: user accounts with saved, per-user conversations (§19.4).
 
 ### Next steps
 
-1. Documentation and deliverables (README, architecture diagram, design, presentation).
+1. Remaining deliverables: design write-up and presentation. Done: README (rewritten for the full system) and architecture and workflow diagrams (`docs/ARCHITECTURE.md`, `docs/diagrams/`).
 2. Optional: a stronger evaluator model for DeepEval when a new provider key is available.

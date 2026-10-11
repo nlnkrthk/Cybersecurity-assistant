@@ -1,32 +1,54 @@
-# APCIRA - AI-Powered Cybersecurity Incident Response Assistant
+# AI-Powered Cybersecurity Incident Response Assistant
 
-> Semantic retrieval, retrieval-augmented generation (RAG), and machine-learning models over the
-> CIC-IDS2017 intrusion-detection dataset, to help security analysts investigate, classify, and
-> prioritize network security incidents.
+> A multi-agent assistant that helps security analysts **investigate, classify, prioritise and
+> respond to** network security incidents, built on the CIC-IDS2017 intrusion-detection dataset.
 
-APCIRA turns 2.8 million raw network-flow records into a searchable library of ~97,500 historical
-incidents. An analyst can ask a question in plain English ("What historical incidents resemble
-DDoS traffic with high packet volume on port 80?"). The system finds the most similar historical
-incidents with hybrid keyword and semantic search, and Claude writes an evidence-grounded
-assessment with investigation and response recommendations that cite incident IDs.
+An analyst asks a question in plain English, such as *"Investigate INC-000035 and tell me how to
+respond"*. A LangGraph supervisor sends it to specialist agents. They classify the attack with
+machine-learning models, score its risk and priority, explain the decision with SHAP, find similar
+past incidents with hybrid search, and recommend response steps. Guardrails check the question
+before any model sees it and verify the answer afterwards. An optional LLM judge grades every
+answer, and analyst feedback is used to retrain the classifier.
 
-Separately, three trained models classify the attack type, score intrusion risk, and flag
-anomalous traffic from a flow's 24 numeric features.
+The assistant runs locally as a **FastAPI backend** with a **Streamlit front end**. Users sign in,
+and each user's conversations are saved to their account.
+
+![System architecture](docs/diagrams/architecture.png)
 
 ---
 
 ## Contents
 
+- [What it can do](#what-it-can-do)
 - [Quick start](#quick-start)
+- [Using the app](#using-the-app)
 - [How it works](#how-it-works)
-- [Usage](#usage)
+- [Results](#results)
 - [Configuration](#configuration)
-- [Machine-learning models](#machine-learning-models)
+- [Command-line tools](#command-line-tools)
+- [Tests and evaluation](#tests-and-evaluation)
 - [Project structure](#project-structure)
-- [Data and outputs](#data-and-outputs)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
 - [Documentation](#documentation)
+
+---
+
+## What it can do
+
+| Capability | How |
+|---|---|
+| **Classify attacks** | Random Forest over 24 flow features, 15 traffic types (accuracy 0.986) |
+| **Score intrusion risk** | Calibrated gradient boosting: probability of malicious traffic → Low / Medium / High / Critical (ROC-AUC 0.9997) |
+| **Detect unusual traffic** | Isolation Forest trained on normal traffic only; flags novel behaviour |
+| **Explain decisions** | SHAP: the metrics that drove each prediction, phrased against normal traffic |
+| **Prioritise incidents** | P1 Critical … P4 Low from risk, attack severity and anomaly, with safety overrides; single flows, batches or a CSV upload |
+| **Find similar incidents** | Hybrid search (BM25 keywords + Chroma embeddings, fused with Reciprocal Rank Fusion) over 97,549 historical incidents, with attack-type, port and numeric filters |
+| **Investigate in conversation** | LangGraph supervisor and 4 agents (Classification, Risk & Priority, Incident Search, Response) with follow-up questions and a live step-by-step trace |
+| **Stay safe** | Input guard (prompt injection, harmful requests, secret redaction) and output guard (unverified incident IDs, wrong figures or priorities, dangerous commands) |
+| **Check its own answers** | LLM-as-Judge scores faithfulness, correctness, relevance, actionability and safety (1–5), with rule-based caps |
+| **Learn from analysts** | 👍 / 👎 ratings and attack-type corrections; guarded retraining keeps a new classifier only if it is not worse |
+| **Accounts** | Sign-up and login; each user's conversations are saved and survive restarts |
 
 ---
 
@@ -37,32 +59,43 @@ anomalous traffic from a flow's 24 numeric features.
 | Requirement | Notes |
 |---|---|
 | Python 3.10+ | Tested with 3.10.11 |
-| Java 17+ | Required by PySpark (data preparation only). Tested with Java 22 |
-| ~3 GB free disk | Dependencies (torch, pyspark) plus the ~620 MB Chroma index |
-| CIC-IDS2017 `MachineLearningCVE` CSVs | The 8 CSV files go in `MachineLearningCVE/` |
-| Anthropic API key | Needed only for the RAG answer step |
+| An LLM API key | NVIDIA NIM (free tier, current setting), Google Gemini or Anthropic Claude |
+| CIC-IDS2017 `MachineLearningCVE` CSVs | Only to rebuild the incident library (step 3) |
+| Java 17+ | Only for step 3 (PySpark) |
+| ~3 GB disk | Dependencies plus the ~620 MB Chroma index |
+
+The trained models (`ml/models/`) and the cleaned training table are in the repository. The
+incident library and search indexes are generated in step 3.
 
 ### 1. Install
 
 ```bash
 python -m venv .venv
+```
+
+```bash
 .venv/Scripts/python -m pip install -r requirements.txt
 ```
 
-On macOS/Linux use `.venv/bin/python` instead of `.venv/Scripts/python`.
+On macOS or Linux, use `.venv/bin/python` instead of `.venv/Scripts/python`.
 
-Optional extras: `truststore` (use the OS certificate store behind TLS-inspecting proxies) and
-`openai` (only if you point the LLM client at an OpenAI-compatible endpoint).
+### 2. Configure the LLM
 
-### 2. Add your API key
-
-Create a `.env` file in the project root. It is gitignored:
+Create a `.env` file in the project root. It is git-ignored; never commit it.
 
 ```
-ANTHROPIC_API_KEY=your-key-here
+LLM_PROVIDER=nvidia
+LLM_MODEL=openai/gpt-oss-20b
+NVIDIA_API_KEY=<your key>
 ```
 
-### 3. Build the data and indexes (one-time)
+To use Gemini or Claude instead, set `LLM_PROVIDER=google` with `GOOGLE_API_KEY`, or
+`LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` (see [Configuration](#configuration)). Without a
+key, the ML and search features still work; only the assistant is unavailable.
+
+### 3. Build the incident library (one-time)
+
+Put the 8 CIC-IDS2017 CSV files in `MachineLearningCVE/`, then:
 
 ```bash
 .venv/Scripts/python scripts/data/prepare_incident_data.py
@@ -72,207 +105,184 @@ ANTHROPIC_API_KEY=your-key-here
 .venv/Scripts/python scripts/indexing/build_search_indexes.py --rebuild
 ```
 
-| Step | Produces | Typical time (16-core CPU, no GPU) |
-|---|---|---|
-| Data preparation | `data/processed/incidents_100k.parquet` | ~3 minutes |
-| Index build | `data/processed/bm25_index.pkl`, `data/processed/chroma/` | ~35 minutes (almost all of it embedding 97k texts) |
+Data preparation takes about 3 minutes. The index build takes about 35 minutes on a CPU (almost
+all of it embedding 97k texts) and downloads the `all-MiniLM-L6-v2` model (~90 MB) once.
 
-The first index build downloads the `all-MiniLM-L6-v2` embedding model (~90 MB) from Hugging Face.
+### 4. Run the app
 
-### 4. Ask questions
+Start the API in one terminal:
 
 ```bash
-.venv/Scripts/python scripts/search/interactive_rag.py
+.venv/Scripts/python scripts/api/run_api.py
 ```
 
-Startup takes about 15–20 seconds while the data, the indexes and the embedding model load. Then
-type a question at the `>` prompt and enter `quit` to exit.
+Start the front end in a second terminal:
+
+```bash
+.venv/Scripts/python scripts/frontend/run_frontend.py
+```
+
+Open **http://localhost:8501** and create an account on the sign-in page. The API's interactive
+documentation is at http://localhost:8000/docs (use **Authorize** with the token from
+`/auth/login` to try the protected endpoints).
+
+---
+
+## Using the app
+
+| Page | Use it to |
+|---|---|
+| **Sign in** | Create an account or log in. Closing the tab or refreshing signs you out; your conversations stay saved |
+| **Home** | See what each tool does and when to use it |
+| **AI Assistant** | Ask questions in plain English and watch each agent work in a live progress panel. Each answer shows the data it used, how it was produced, safety notices and (optionally) a quality grade. Rate answers 👍 / 👎 and correct wrong attack types. Reopen, rename or delete conversations under **My conversations** |
+| **Flow Analysis** | Check one network flow (a historical incident or your own metrics): attack type, intrusion risk, unusualness, priority and SHAP charts of what drove the result |
+| **Incident Search** | Find similar historical incidents with filters, and compare an attack type's typical traffic with normal traffic |
+| **Triage Queue** | Upload a CSV of flows (or paste incident IDs) and get them ranked by urgency |
+| **Quality & Feedback** | Grade any answer with the LLM judge; see approval rates, judge–analyst agreement and corrections, and export corrections for retraining |
+
+Example questions for the assistant:
+
+- *Investigate incident INC-000035 and tell me how to respond*
+- *Is a flow of 2 s with 10 forward and 8 backward packets, 1.2 KB forward and 4 KB backward suspicious?*
+- *Has a similar SSH brute force incident occurred before?*
+- *What traffic characteristics are typical of DDoS?*
+- *Which of INC-000001, INC-000005, INC-002545 and INC-000035 should I investigate first?*
 
 ---
 
 ## How it works
 
-```
- MachineLearningCVE/*.csv  (8 files, 2,830,743 flows)
-            │
-            ▼
- ┌──────────────────────────────────────────────────────────┐
- │ 1. DATA PREPARATION  (PySpark)  prepare_incident_data.py │
- │    load → normalize headers → cast numerics → inf→null   │
- │    → standardize labels → hash-dedup → drop null rows    │
- │    → stratified sample → assign INC-IDs → incident_text  │
- └──────────────────────────────────────────────────────────┘
-            │  incidents_100k.parquet (97,549 rows × 41 cols, 15 labels)
-            ▼
- ┌──────────────────────────────────────────────────────────┐
- │ 2. INDEXING  build_search_indexes.py                     │
- │    BM25 keyword index  +  all-MiniLM-L6-v2 embeddings    │
- │    stored in Chroma (cosine) with incident metadata      │
- └──────────────────────────────────────────────────────────┘
-            │
-            ▼
- ┌──────────────────────────────────────────────────────────┐
- │ 3. RAG QUERY  interactive_rag.py → rag/rag_pipeline.py   │
- │    a. infer filters from the question (label, port, ...) │
- │    b. metadata hard filter  → eligible incident IDs      │
- │    c. numeric hard filter   (packet rate, duration, ...) │
- │    d. hybrid search: BM25 + vector, fused with RRF       │
- │    e. re-validate results against every filter           │
- │    f. build context + grounded prompt → Claude           │
- └──────────────────────────────────────────────────────────┘
-            │
-            ▼
- Structured answer: Assessment · Evidence · Relevance ·
- Investigation · Response · Confidence/Limitations
-```
+### One assistant turn
 
-### Incident text
+![Assistant workflow](docs/diagrams/agent_workflow.png)
 
-Each sampled flow becomes a template-built description, with no LLM involved. This text is what
-gets indexed:
+1. **Input guard.** Blocks prompt injection and requests to build attacks (defensive questions
+   are allowed) and replaces secrets such as passwords and API keys with `[REDACTED_…]` before any
+   LLM sees the message.
+2. **Supervisor.** The LLM picks a route: `classify`, `risk`, `search`, `recommend`,
+   `investigate` (all four agents in order), `general` or `out_of_scope`.
+3. **Specialist agents** call tools: incident lookup, attack-type classifier, intrusion risk,
+   anomaly score, SHAP explanation, prioritiser, hybrid search and attack-type profiles. If key
+   metrics are missing (duration, packets, bytes), the assistant asks for them instead of guessing.
+4. **Final answer.** One reply from all findings: assessment, why (SHAP), similar incidents,
+   recommended actions, confidence and limitations.
+5. **Output guard.** Marks incident IDs that no tool returned, flags figures and priorities that
+   contradict the tools, removes dangerous commands and adds missing caveats.
+6. **LLM-as-Judge** (optional). Grades the answer against the tool evidence.
 
-```
-Attack: DoS Hulk. Destination port: 80. Flow duration: 101175690 microseconds.
-Forward packets: 5. Backward packets: 7. Forward bytes: 379. Backward bytes: 11595. ...
-```
+The front end shows each of these steps live (Server-Sent Events), and the finished trace is kept
+under every answer.
 
-Missing values are omitted rather than filled in.
+### Data and models
 
-### Hybrid search
+- **Incident library.** PySpark cleans and deduplicates the 2.8 million raw flows, samples 97,549
+  incidents across 15 traffic types and writes a template-based description of each (no LLM
+  involved). These descriptions are indexed with BM25 and Chroma.
+- **Models.** Three models use the same 24 flow features. `dst_port` is excluded so they learn
+  behaviour, not "port X means attack Y", and duplicate flows are removed before splitting.
+  Partial input is allowed: missing metrics are derived or filled with normal-traffic medians,
+  listed in the answer, and lower the reported confidence.
+- **Priority.** `score = 100 × (0.45 × risk + 0.35 × severity × confidence + 0.20 × anomaly)`,
+  mapped to P1 (≥ 75) … P4 (< 25), with overrides (for example, traffic classified as BENIGN but
+  highly anomalous is at least P2).
 
-- **BM25** ranks exact keyword matches. A custom tokenizer folds case, splits camel case and
-  strips common `-ing`/`-ed`/plural suffixes.
-- **Vector search** embeds the query with `all-MiniLM-L6-v2` (384 dimensions) and finds the
-  nearest incident descriptions in Chroma by cosine distance.
-- **Reciprocal Rank Fusion** (k = 60, equal weights) merges the two ranked lists by rank, so the
-  differently scaled BM25 scores and cosine distances never have to be compared directly.
-- Results with identical text are collapsed so the evidence is not repetitive.
-
-### Hard filters in RAG
-
-Before retrieval, the RAG pipeline reads constraints out of the question and applies them
-**strictly**. If nothing matches, it says so rather than falling back to unfiltered results.
-
-| Query phrase | Becomes |
-|---|---|
-| an attack name, e.g. "PortScan", "DDoS" | `label` filter |
-| "port 80", "destination port 443", "src port 22" | `dst_port` / `src_port` filter |
-| "TCP", "UDP", "protocol 6" | `protocol` filter (no values in this dataset, see limitations) |
-| "high packet volume" / "high traffic volume" | packet rate ≥ the 75th percentile within the filtered set |
-| "more than 1000 packets/s", "pps over 500" | explicit packet-rate condition |
-| "more than 20 packets" | total packets (forward + backward) condition |
-| "duration over 2 seconds" | flow duration, converted to microseconds |
-
-Filters passed with `--filter` override inferred filters on the same field.
+Details of every component: [docs/IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md).
+Diagrams and their explanation: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
-## Usage
+## Results
 
-### RAG assistant (`scripts/search/interactive_rag.py`)
+### Machine-learning models (held-out test sets)
 
-```bash
-# Interactive: type questions at the prompt
-.venv/Scripts/python scripts/search/interactive_rag.py
-
-# Answer one question and exit
-.venv/Scripts/python scripts/search/interactive_rag.py "How do PortScan incidents differ from benign traffic?"
-
-# Explicit metadata filters (AND-combined) and fewer evidence incidents
-.venv/Scripts/python scripts/search/interactive_rag.py --filter label=PortScan --filter dst_port=80 --top-k 3 "Find similar historical incidents"
-
-# Show filters, numeric thresholds, candidate counts and packet rates of the evidence
-.venv/Scripts/python scripts/search/interactive_rag.py --debug "DDoS traffic on port 80 with high packet volume"
-```
-
-| Option | Default | Meaning |
+| Model | Task | Results |
 |---|---|---|
-| `query` (positional) | none | Answer one question, then exit |
-| `--top-k N` | 5 | Number of historical incidents passed to the LLM as evidence |
-| `--filter FIELD=VALUE` | none | Hard metadata filter; repeatable. Aliases: `attack_type` → `label`, `destination_port` → `dst_port` |
-| `--debug` | off | Print the hard-filter trace before the answer |
+| Random Forest, balanced classes | Attack type (15 classes) | Accuracy 0.986 · weighted F1 0.985 · macro F1 0.839 (rare classes such as SQL injection pull the macro score down) |
+| Histogram gradient boosting, isotonic-calibrated | Intrusion risk | ROC-AUC 0.9997 · recall 0.998 · precision 0.991 · false-alarm rate 0.7% |
+| Isolation Forest on normal traffic | Anomaly | ROC-AUC 0.855 · 5.1% false alarms on normal traffic at Medium or above |
 
-Example `--debug` trace:
+In an unseen-attack test (each attack family hidden during training), the anomaly detector still
+flagged 71% of Infiltration and 63% of PortScan flows that the supervised risk model missed.
 
-```
-Metadata filters: {'label': 'DDoS', 'dst_port': 80}
-Numeric: flow_packets_per_sec >= 12.77 packets/s (source=DDoS P75, sample_count=7842)
-Candidate counts: {'before_metadata_filter': 97549, 'after_metadata_filter': 7843,
-                   'after_numeric_filter': 1961, 'bm25_results': 5, 'vector_results': 5, 'rrf_results': 5}
-```
+### Assistant quality (DeepEval, 24 labelled cases, gpt-oss-20b)
 
-### Hybrid search without an LLM (`scripts/search/interactive_hybrid_search.py`)
+| Exact checks | Faithfulness | Answer relevancy | Contextual relevancy | Recommendation quality | Safety |
+|---:|---:|---:|---:|---:|---:|
+| 98% | 0.95 | 0.95 | 0.85 | 0.88 | 0.92 |
 
-Shows the BM25, vector and fused rankings side by side. It needs no API key.
-
-```bash
-.venv/Scripts/python scripts/search/interactive_hybrid_search.py "PortScan SYN multiple destinations"
-.venv/Scripts/python scripts/search/interactive_hybrid_search.py --debug --filter label=PortScan "PortScan SYN traffic"
-```
-
-`--debug` prints the normalized query, the BM25 tokens and each result's RRF contribution. See
-[docs/HYBRID_SEARCH_QUERIES.txt](docs/HYBRID_SEARCH_QUERIES.txt) for example queries.
-
-### Retrieval evaluation (`scripts/evaluation/evaluate_hybrid_search.py`)
-
-Runs 12 hand-labelled queries and reports Hit@K, Precision@K and MRR for BM25, vector and RRF.
-
-```bash
-.venv/Scripts/python scripts/evaluation/evaluate_hybrid_search.py --top-k 5 --output data/logs/eval_report.txt
-```
+The exact checks are computed from the data, with no LLM involved: route, predicted attack type,
+priority, cited incident IDs, filters, guardrail blocks and redaction. On its first run, the LLM
+judge passed 13 of 15 questions. Both failures led to fixes, and the affected questions then passed.
+The judge and DeepEval runs exposed real defects, all now fixed: a misrouted question, a search
+missing its attack-type filter, and a redacted password causing a refusal (see the fix log in the
+implementation summary).
 
 ---
 
 ## Configuration
 
-### Environment variables (`.env`)
+`.env` (runtime settings, never committed):
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | none | Anthropic API key (also accepts `LLM_API_KEY` or `OPENAI_API_KEY`) |
-| `LLM_MODEL` | `claude-sonnet-5-5` | Model used for RAG answers (`ANTHROPIC_MODEL` also accepted) |
-| `LLM_MAX_TOKENS` | `16000` | Maximum output tokens per answer |
-| `LLM_BASE_URL` | none | An OpenAI-compatible or OpenRouter endpoint (requires `openai`) |
-| `LLM_TEMPERATURE` | `0` | Used only by the OpenAI-compatible path; current Claude models reject custom sampling values |
-| `RAG_CONTEXT_TOP_K` | `5` | Default evidence count when `--top-k` is not given |
-| `HF_HUB_OFFLINE` | unset | Set to `1` once the embedding model is cached to skip Hugging Face network checks |
+| Variable | Purpose |
+|---|---|
+| `LLM_PROVIDER` | `nvidia`, `google` or `anthropic` |
+| `LLM_MODEL` | Model for that provider (defaults: `openai/gpt-oss-20b`, `gemini-3.5-flash`, `claude-sonnet-5-5`) |
+| `NVIDIA_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY` | Provider keys |
+| `LLM_REQUESTS_PER_MINUTE` | Optional client-side rate limit (for example 5 on the Gemini free tier) |
+| `JUDGE_PROVIDER`, `JUDGE_MODEL` | Optional separate model for the LLM judge |
+| `JUDGE_MODE` | `on` grades every answer by default; `off` (default) only on request |
+| `FEEDBACK_DB_PATH`, `AUTH_DB_PATH`, `CHAT_DB_PATH` | Optional database locations (defaults under `data/feedback/` and `data/app/`) |
+| `API_CORS_ORIGINS` | Browser origins allowed to call the API (default: Streamlit on port 8501) |
+| `API_BASE_URL` | API address used by the front end (default `http://localhost:8000`) |
 
-### Code settings (`src/config.py`)
-
-Paths, the raw-to-internal column mapping, the label standardization map, the per-class sampling
-targets (`SAMPLES_PER_CLASS_100K`), the random seed (42), the embedding model name, the Chroma
-collection name, and the RRF constant and weights.
+Paths, column mappings, sampling targets, search constants and the login lifetime are in
+`src/config.py`.
 
 ---
 
-## Machine-learning models
+## Command-line tools
 
-All three models train on `data/cleaned_network_data/cleaned_network_data.csv`, produced by
-`ml/eda/data_cleaning.ipynb`. They use the same **24 numeric flow features**, with `dst_port`
-deliberately excluded so the models learn traffic behaviour rather than "port X means attack Y".
-Duplicate feature vectors are removed before splitting so no flow appears in both train and test.
-Each notebook saves `ml/models/<name>.pkl` plus `<name>_meta.json` (features, thresholds, metrics)
-and ends with a "test with custom data" cell.
+| Command | Purpose |
+|---|---|
+| `scripts/agents/interactive_assistant.py` | Chat with the assistant in the terminal, with the live agent trace (`--judge` to grade answers) |
+| `scripts/ml/interactive_ml.py` | Describe a flow in words; get the models' verdict |
+| `scripts/search/interactive_rag.py` | The standalone RAG pipeline (retrieve + answer) |
+| `scripts/search/interactive_hybrid_search.py` | BM25, vector and fused rankings side by side (no LLM) |
+| `scripts/feedback/feedback_report.py` | Feedback statistics |
+| `scripts/feedback/retrain_classifier.py` | Retrain the classifier with analyst corrections (`--dry-run`, `--list`, `--activate`) |
+| `scripts/evaluation/evaluate_hybrid_search.py` | Retrieval metrics (Hit@K, Precision@K, MRR) on labelled queries |
+| `scripts/evaluation/judge_answers.py` | LLM-judge calibration and evaluation |
+| `scripts/evaluation/run_deepeval.py` | DeepEval evaluation (see below) |
 
-| Notebook | Model | Task | Held-out test results |
-|---|---|---|---|
-| [`ml/attack_classifier.ipynb`](ml/attack_classifier.ipynb) | Random Forest (balanced classes) | 15-class attack type | Accuracy 0.986 · weighted F1 0.985 · macro F1 0.839 (rare classes such as SQL injection and Infiltration pull the macro score down) |
-| [`ml/intrusion_risk.ipynb`](ml/intrusion_risk.ipynb) | Histogram gradient boosting, isotonic-calibrated | Probability a flow is malicious → Low / Medium / High / Critical | ROC-AUC 0.9997 · recall 0.998 · precision 0.991 · false-alarm rate 0.7% |
-| [`ml/anomaly_detector.ipynb`](ml/anomaly_detector.ipynb) | arcsinh transform → Isolation Forest, trained on BENIGN only | Unsupervised "how unusual is this flow" → Low / Medium / High | ROC-AUC 0.855 · 5.1% benign false alarms at Medium or above |
+Run each with `.venv/Scripts/python <script> --help` for its options.
 
-The intrusion-risk notebook also runs an **unseen-attack test**. It retrains the model without one
-attack family and checks whether that family is still caught:
+---
 
-| Hidden family | Risk model detects | Anomaly detector flags |
-|---|---|---|
-| Web Attack | 2.8% | 0% |
-| Infiltration | 0% | 71% |
-| PortScan | 22% | 63% |
+## Tests and evaluation
 
-The supervised model is very accurate on attacks it has seen, and the anomaly detector adds some
-coverage for novel ones. EDA notebooks are in `ml/eda/`.
+```bash
+.venv/Scripts/python -m pytest -q
+```
 
-> These models are not yet wired into the RAG pipeline or exposed through an API.
+403 tests run in about 2 minutes without an API key. A scripted fake LLM drives the agent graph,
+and the ML models, tools, search, API and front-end pages are tested for real. Tests use temporary
+databases and never touch `data/`.
+
+DeepEval is an optional extra (it needs one extra step because of a dependency pin):
+
+```bash
+.venv/Scripts/python -m pip install -r requirements-eval.txt
+```
+
+```bash
+.venv/Scripts/python -m pip install "click>=8.4.2,<9"
+```
+
+```bash
+.venv/Scripts/python scripts/evaluation/run_deepeval.py all
+```
+
+Runs are resumable and write JSONL, JSON, CSV and Markdown reports to `data/evaluation/`.
 
 ---
 
@@ -280,103 +290,44 @@ coverage for novel ones. EDA notebooks are in `ml/eda/`.
 
 ```
 Cybersecurity-assistant/
-├── MachineLearningCVE/                  Raw CIC-IDS2017 CSVs (8 files, not in git)
-├── data/
-│   ├── processed/                       Generated, not in git
-│   │   ├── incidents_100k.parquet       Prepared incidents
-│   │   ├── bm25_index.pkl               BM25 keyword index
-│   │   └── chroma/                      Chroma vector store
-│   ├── cleaned_network_data/            ML training table (from data_cleaning.ipynb)
-│   └── logs/                            Pipeline and index-build logs
+├── frontend/                   Streamlit app: app.py, api_client.py, components, views/ (one file per page)
 ├── src/
-│   ├── config.py                        Central configuration
-│   ├── data/                            PySpark data pipeline
-│   │   ├── loader.py                    Load and align the 8 CSVs
-│   │   ├── cleaner.py                   Normalize, cast, clean labels, deduplicate
-│   │   ├── sampler.py                   Stratified sampling
-│   │   ├── text_builder.py              Flow → incident_text
-│   │   └── validator.py                 Output validation
-│   ├── retrieval/
-│   │   ├── bm25_index.py                BM25 index and tokenizer
-│   │   ├── embedder.py                  Sentence-transformer wrapper
-│   │   ├── chroma_store.py              Chroma build, search and alignment checks
-│   │   ├── hybrid.py                    BM25 + vector + RRF
-│   │   ├── metadata.py                  Metadata records and frame validation
-│   │   ├── metadata_filter.py           Filter validation and eligible IDs
-│   │   ├── filters.py                   Chroma-style operator evaluation
-│   │   └── numeric_filter.py            Numeric conditions from natural language
-│   ├── rag/
-│   │   ├── rag_pipeline.py              End-to-end RAG orchestration
-│   │   ├── context_builder.py           Evidence → context block
-│   │   └── prompt_builder.py            Grounded prompt template
-│   └── llm/client.py                    Anthropic / OpenAI-compatible client
-├── scripts/
-│   ├── data/prepare_incident_data.py
-│   ├── indexing/build_search_indexes.py
-│   ├── search/interactive_rag.py
-│   ├── search/interactive_hybrid_search.py
-│   └── evaluation/evaluate_hybrid_search.py
-├── ml/
-│   ├── attack_classifier.ipynb
-│   ├── intrusion_risk.ipynb
-│   ├── anomaly_detector.ipynb
-│   ├── eda/                             analyse.ipynb, data_cleaning.ipynb
-│   └── models/                          Saved models (.pkl) and metadata (.json)
-├── docs/                                Additional documentation
-├── project_guidelines/                  Capstone brief and submission guidelines
-└── requirements.txt
+│   ├── api/                    FastAPI app, schemas, routes (auth, chat, judge, feedback, ml, search, system)
+│   ├── agents/                 LangGraph graph, specialist agents, prompts, guardrails, judge, trace, tools/
+│   ├── auth/                   Password hashing, tokens, login limiter, accounts and conversation ownership
+│   ├── services/               ML service, flow-input parsing and validation, prioritisation
+│   ├── retrieval/              BM25, embeddings, Chroma, hybrid search, metadata and numeric filters
+│   ├── rag/                    Standalone RAG pipeline (context and prompt builders)
+│   ├── feedback/               Feedback store, turn snapshots, retraining
+│   ├── evaluation/             DeepEval cases, metrics, exact checks, runner
+│   ├── llm/                    Provider settings, LLM client, text normalisation
+│   ├── data/                   PySpark data pipeline
+│   └── config.py               Central configuration
+├── scripts/                    Command-line entry points (api, frontend, data, indexing, agents, ml, search, feedback, evaluation)
+├── ml/                         Model notebooks, EDA, saved models (models/) and report figures
+├── tests/                      pytest suite
+├── docs/                       Implementation summary, architecture, diagrams/
+├── data/                       Cleaned training table (in git); generated data, indexes and databases (not in git)
+├── .streamlit/config.toml      Front-end theme
+├── requirements.txt            Runtime and test dependencies
+└── requirements-eval.txt       DeepEval (optional)
 ```
-
----
-
-## Data and outputs
-
-### Sampled dataset (`incidents_100k.parquet`)
-
-97,549 incidents, 41 columns: `incident_id`, `incident_text`, `label`, ports, and flow, packet,
-flag, window and timing features. Large classes are sampled down toward fixed targets; small
-classes are kept whole.
-
-| Label | Rows | Label | Rows |
-|---|---:|---|---:|
-| BENIGN | 52,210 | DoS Slowhttptest | 2,584 |
-| DDoS | 7,843 | Bot | 1,936 |
-| PortScan | 7,828 | Web Attack - Brute Force | 1,323 |
-| DoS Hulk | 7,819 | Web Attack - XSS | 651 |
-| DoS GoldenEye | 5,246 | Infiltration | 36 |
-| FTP-Patator | 4,259 | Web Attack - Sql Injection | 20 |
-| SSH-Patator | 3,149 | Heartbleed | 11 |
-| DoS slowloris | 2,634 | **Total** | **97,549** |
-
-Of the 2,830,743 raw flows, 2,236,725 remain after hash-based deduplication.
-
-### Generated files
-
-| Path | Size | Rebuild with |
-|---|---|---|
-| `data/processed/incidents_100k.parquet` | ~20 MB | `prepare_incident_data.py` |
-| `data/processed/bm25_index.pkl` | ~130 MB | `build_search_indexes.py --rebuild` |
-| `data/processed/chroma/` | ~620 MB | `build_search_indexes.py --rebuild` |
-| `data/logs/*.log` | small | written by each run |
-
-If the Parquet changes, rebuild the indexes. The search scripts refuse to run against stale or
-misaligned indexes.
 
 ---
 
 ## Known limitations
 
-- **Metadata filtering is limited to `label` and `dst_port`.** The `MachineLearningCVE` release of
-  CIC-IDS2017 has no source/destination IP, source port, protocol or timestamp columns, so those
-  fields are empty. Filtering on them returns an error that lists the available fields. The
-  "GeneratedLabelledFlows" release of the dataset contains them.
-- **Each incident is one flow.** Volumetric or distributed behaviour, such as many sources hitting
-  one host, cannot be seen from a single record, and the LLM says so in its limitations section.
-- **The answer depends on an external API.** Retrieval works offline once the embedding model is
-  cached; the generated answer needs network access and an API key.
-- **Not yet implemented** from the capstone brief: REST API endpoints, input guardrails, incident
-  prioritization in the RAG flow, model integration into RAG, DeepEval, LLM-as-judge, a multi-agent
-  workflow, a feedback loop and a front end.
+- **Single flows, limited metadata.** Each incident is one flow, so distributed behaviour isn't
+  visible, and this dataset release has no IP, protocol or timestamp values. Only attack-type,
+  port and numeric filters have data.
+- **Small LLM.** The current model (gpt-oss-20b on the NVIDIA free tier) sometimes adds general
+  knowledge beyond the evidence. The output guard and judge catch the factual cases. An
+  investigation makes about 10 LLM calls (1–3 minutes).
+- **Partial input** biases predictions towards BENIGN. Answers say so and lower their confidence.
+- **Local-app security.** No HTTPS, password reset or roles. A browser refresh signs you out of
+  the front end.
+- **Evaluator.** DeepEval uses the same small model as the assistant; a stronger evaluator would
+  make its scores more reliable. The exact checks don't depend on it.
 
 ---
 
@@ -384,28 +335,26 @@ misaligned indexes.
 
 | Symptom | Fix |
 |---|---|
-| `Retrieval indexes are missing` | Run `build_search_indexes.py --rebuild` |
-| `Cached BM25 index does not match the current Parquet data` | The Parquet was regenerated; rebuild the indexes |
-| `No LLM API key configured` | Add `ANTHROPIC_API_KEY` to `.env` |
-| `ModuleNotFoundError` (pyspark, chromadb, ...) | Use the venv interpreter `.venv/Scripts/python`, not the system Python |
-| `pip install` fails building `pyspark` | It is a ~450 MB source build; retry. It is usually a transient download failure |
-| Spark `winutils.exe` / `HADOOP_HOME` warning on Windows | Harmless; the pipeline only reads local files |
-| Hugging Face "unauthenticated requests" or symlink warnings | Harmless; set `HF_HUB_OFFLINE=1` after the first download to silence network checks |
-| `too many SQL variables` from Chroma | Fixed: alignment checks and large candidate sets are now paged or filtered in Python |
+| Front end shows **Backend API: Offline** | Start the API (`scripts/api/run_api.py`), then click **Retry connection** |
+| `Sign in required` or you are sent back to the sign-in page | Your session expired or the API was restarted with a new accounts database; sign in again |
+| `The assistant is not available: No LLM API key configured` | Add the provider key to `.env` and restart the API |
+| `The language model provider returned an error` (502) | Provider quota, billing or outage; the message gives the provider's reason |
+| Incident search shows `loading` | The indexes load in the background for about 20 seconds after the API starts |
+| `Retrieval indexes are missing` or misaligned | Run `build_search_indexes.py --rebuild` |
+| `ImportError` in Streamlit after updating the code | Stop Streamlit (Ctrl+C) and start it again |
+| `ModuleNotFoundError` | Use the venv interpreter (`.venv/Scripts/python`) |
 
 ---
 
 ## Documentation
 
-- [docs/IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md): component-by-component
-  implementation details, design decisions and the fix log
-- [docs/QUICKSTART.md](docs/QUICKSTART.md): short getting-started guide
-- [docs/METADATA_FILTERING.md](docs/METADATA_FILTERING.md): metadata filter fields and behaviour
-- [docs/HYBRID_SEARCH_QUERIES.txt](docs/HYBRID_SEARCH_QUERIES.txt): example search queries
-- [docs/DELIVERABLES.txt](docs/DELIVERABLES.txt): data-pipeline deliverables checklist
-- [project_guidelines/](project_guidelines/): capstone brief (Project 8) and submission guidelines
+- [docs/IMPLEMENTATION_SUMMARY.md](docs/IMPLEMENTATION_SUMMARY.md): every component, test
+  coverage, verified results, fix log and design decisions
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): architecture and workflow diagrams with explanations
+- [docs/METADATA_FILTERING.md](docs/METADATA_FILTERING.md), [docs/HYBRID_SEARCH_QUERIES.txt](docs/HYBRID_SEARCH_QUERIES.txt): search details
+- [project_guidelines/](project_guidelines/): capstone brief and submission guidelines
 
 ## Technologies
 
-PySpark · Pandas · PyArrow · rank-bm25 · Sentence Transformers (`all-MiniLM-L6-v2`) · ChromaDB ·
-Anthropic Claude · scikit-learn · Jupyter
+Python · LangGraph · LangChain · FastAPI · Streamlit · scikit-learn · SHAP · PySpark · ChromaDB ·
+rank-bm25 · Sentence Transformers · SQLite · DeepEval · NVIDIA NIM / Gemini / Claude
