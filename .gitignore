@@ -138,3 +138,7 @@ data/app/
 # DeepEval: cache folder; the labelled case set is committed
 .deepeval/
 !src/evaluation/cases/*.json
+
+# Sample data for reviewers and demos (small, committed)
+!data/sample_data/
+!data/sample_data/**

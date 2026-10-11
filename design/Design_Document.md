@@ -1,6 +1,7 @@
 ---
 title: "AI-Powered Cybersecurity Incident Response Assistant"
 subtitle: "Design Document"
+tagline: "Investigate, classify, prioritise and respond to network security incidents with retrieval, machine learning and a multi-agent LLM workflow"
 project: "Capstone Project 8 · CIC-IDS2017"
 author: "Nalin"
 date: "October 2026"

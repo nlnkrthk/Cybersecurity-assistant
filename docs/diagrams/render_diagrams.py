@@ -338,6 +338,64 @@ def agent_workflow() -> None:
     c.save("agent_workflow")
 
 
+# ============================================================================
+# Data flow: dataset → … → user interface
+# ============================================================================
+def data_flow() -> None:
+    c = Canvas(1600, 860, "Data flow: from the CIC-IDS2017 dataset to the user interface")
+    c.text(800, 24, "Data flow: dataset → preprocessing → chunking → embeddings → vector database → retriever "
+                    "→ LLM / RAG → agents → API → UI", 17, True)
+
+    c.text(40, 74, "OFFLINE  ·  build the incident library once", 13, True, SLATE[1], anchor="start")
+    row1 = [
+        ("1  Dataset", ["CIC-IDS2017 MachineLearningCVE", "8 CSV files, 2,830,743 flows", "15 traffic labels"], SLATE),
+        ("2  Preprocessing", ["PySpark: normalise headers, cast,", "inf → null, fix labels,", "SHA-256 dedupe → 2,236,725"], SLATE),
+        ("3  Chunking", ["stratified sample: 97,549 incidents", "1 flow = 1 template text (one chunk)", "≤ 241 tokens, no splitting"], BLUE),
+        ("4  Embeddings", ["all-MiniLM-L6-v2", "384-dimension vectors", "batches of 128 (CPU)"], BLUE),
+        ("5  Vector database", ["ChromaDB, cosine distance", "+ incident metadata", "(label, port, …)"], BROWN),
+    ]
+    for i, (title, body, colors) in enumerate(row1):
+        x = 40 + i * 310
+        c.box(x, 96, 270, 120, title, body, colors=colors)
+        if i:
+            c.arrow([(x - 40, 156), (x, 156)])
+    c.box(970, 262, 270, 84, "Keyword index", ["BM25 (rank-bm25)", "same texts and metadata"], colors=BROWN)
+    c.arrow([(795, 216), (795, 304), (970, 304)])
+
+    c.text(40, 410, "AT QUESTION TIME  ·  arrows show how evidence reaches the analyst", 13, True, VIOLET[1], anchor="start")
+    row2 = [
+        ("10  User interface", ["Streamlit: chat with live", "agent tracker, flow analysis,", "search, triage, feedback"], BLUE),
+        ("9  API layer", ["FastAPI: REST + Server-Sent", "Events, bearer-token auth,", "saved conversations"], INDIGO),
+        ("8  Agents", ["LangGraph supervisor +", "4 specialist agents,", "guardrails, LLM judge"], VIOLET),
+        ("7  LLM / RAG", ["grounded answer from the", "evidence, cited incident IDs", "(gpt-oss-20b on NVIDIA NIM)"], PINK),
+        ("6  Retriever", ["filters (attack type, port,", "numeric) → BM25 + vector", "→ Reciprocal Rank Fusion"], GREEN),
+    ]
+    for i, (title, body, colors) in enumerate(row2):
+        x = 40 + i * 310
+        c.box(x, 432, 270, 120, title, body, colors=colors)
+        if i:
+            c.arrow([(x, 492), (x - 40, 492)])
+    c.arrow([(1480, 216), (1480, 432)], "vector search", label_at=(1490, 330))
+    c.arrow([(1240, 304), (1330, 304), (1330, 432)], "keyword search", label_at=(1340, 380))
+
+    c.text(40, 610, "MACHINE-LEARNING TRACK  ·  models the agents call as tools", 13, True, GREEN[1], anchor="start")
+    c.box(350, 632, 270, 110, "Feature table", ["97,548 sampled flows,", "24 numeric features", "(dst_port excluded)"], colors=SLATE)
+    c.box(660, 632, 270, 110, "Models + SHAP", ["attack type · intrusion risk ·", "anomaly · prioritiser P1–P4", "SHAP explanations"], colors=GREEN)
+    c.arrow([(620, 687), (660, 687)], "train", label_at=(640, 674), label_anchor="middle")
+    c.arrow([(795, 632), (795, 552)], "tool calls", label_at=(805, 595))
+    c.box(970, 632, 580, 110, "Feedback loop", ["analyst ratings and attack-type corrections (SQLite) →",
+                                                "guarded retraining: a new classifier is kept only if macro-F1 holds"], colors=AMBER)
+    c.arrow([(970, 687), (930, 687)])
+
+    c.text(800, 800, "Steps 1–5 run once (about 40 minutes on a CPU). Steps 6–10 run for every question: the question "
+                     "goes from the interface (left) to the retriever (right), and the evidence and answer come back "
+                     "along the arrows.", 12, False, MUTED)
+    c.text(800, 824, "Each incident is one network flow, so each search hit is a complete, citable incident with its "
+                     "own ID and metadata.", 12, False, MUTED)
+    c.save("data_flow")
+
+
 if __name__ == "__main__":
     architecture()
     agent_workflow()
+    data_flow()
