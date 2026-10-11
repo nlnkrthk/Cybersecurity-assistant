@@ -51,10 +51,27 @@ SHARED_AGENT_RULES = """Rules:
   both when they differ.
 - If input_quality is 'reduced' or 'low', or metrics were filled with normal-traffic values, say so:
   results are then less reliable (partial input tends to bias predictions toward BENIGN).
-- If a tool returns status "error", correct the call once if you can; otherwise report the error.
+- If a tool returns status "error", correct the call once if you can; otherwise report the error."""
 
-Finish with your findings for the final report writer: short bullet points with the key numbers,
+# How an agent ends its work (appended to its prompt by agent_system_prompt()).
+FINDINGS_ENDING = """Finish with your findings for the final report writer: short bullet points with the key numbers,
 levels, incident IDs and caveats. No greetings, no questions to the user (except the QUESTION line)."""
+
+DIRECT_REPLY_ENDING = """You are the only agent for this question, and your final message is shown to the security analyst
+as the reply (there is no separate report writer). Do your full analysis with your tools first, exactly
+as usual (for a specific flow or incident, run the model tools; a historical label alone is not an
+analysis); only your final message changes. Write it for the analyst:
+- Answer the question directly, using only your tool results; keep model predictions, historical
+  labels and analyst feedback (human corrections) distinct.
+- State the confidence caveats (reduced input quality, filled metrics, low confidence, conflicting
+  signals such as a BENIGN prediction with high anomaly).
+- Cite historical incident IDs from your tool results. Never mention an incident ID that no tool
+  returned, and write a 'Similar past incidents' section only if a search tool returned incidents.
+- Be concise: short sections with headings only for the parts that have content, in this order when
+  relevant: Assessment, Why, Similar past incidents, Recommended actions, Confidence & limitations.
+- For a question about what an attack type looks like (no specific flow), describe its typical traffic
+  in this dataset, giving each metric's typical (median) value vs normal traffic.
+No greetings. If you need information from the user, use the QUESTION line instead."""
 
 
 CLASSIFICATION_PROMPT = f"""You are the Classification agent of a cybersecurity incident-response assistant.
@@ -84,6 +101,9 @@ Tools:
 - prioritize_flow: P1-P4 priority for one flow with score, reason and rule overrides.
 - prioritize_flows: rank many flows and/or incident IDs; use for lists.
 - lookup_incident: stored metrics of an incident.
+
+For a single flow or incident, always call prioritize_flow as well as assess_intrusion_risk: the
+priority is part of every risk answer, including 'is this suspicious?' questions.
 
 Report: intrusion probability and level, anomaly level and unusual metrics, priority with its reason
 and any overrides (e.g. 'classified BENIGN but highly unusual - possible unknown attack'). For lists,
@@ -140,6 +160,11 @@ AGENT_PROMPTS = {
     "incident_search": INCIDENT_SEARCH_PROMPT,
     "response": RESPONSE_PROMPT,
 }
+
+
+def agent_system_prompt(agent: str, direct_reply: bool = False) -> str:
+    """An agent's system prompt: findings for the report writer, or the reply itself when it works alone."""
+    return f"{AGENT_PROMPTS[agent]}\n\n{DIRECT_REPLY_ENDING if direct_reply else FINDINGS_ENDING}"
 
 
 FINAL_ANSWER_PROMPT = """You write the final reply of a cybersecurity incident-response assistant for a

@@ -62,7 +62,8 @@ the LLM provider.
   get a fixed refusal and are replaced in the conversation history, so they can't influence later
   turns. Secrets are redacted.
 - The **supervisor** chooses one route; only the agents that route needs are run. A classification
-  question costs about 4 LLM calls; a full investigation about 10.
+  question costs about 3 LLM calls; a full investigation about 10–15, with Classification and
+  Risk & Priority running in parallel, then Incident Search and Response.
 - **Agents** call tools and write findings into the shared state. If the key metrics of a flow
   are missing, the turn ends with a follow-up question instead of a guess.
 - The **final answer** is written once, from all findings.

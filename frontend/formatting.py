@@ -196,7 +196,10 @@ def pipeline_steps(events: List[Dict[str, Any]], judge: bool = False, running: b
         elif kind == "route":
             step = by_key["route"]
             plan = event.get("plan") or []
-            agents = ", ".join(AGENT_NAMES.get(a, a) for a in plan) or "no specialist agents needed"
+            stages = event.get("stages") or [[a] for a in plan]
+            agents = ", then ".join(" + ".join(AGENT_NAMES.get(a, a) for a in stage) for stage in stages) \
+                if any(len(stage) > 1 for stage in stages) else ", ".join(AGENT_NAMES.get(a, a) for a in plan)
+            agents = agents or "no specialist agents needed"
             step.update(status="done", elapsed_ms=event.get("elapsed_ms"),
                         detail=f"{ROUTE_LABELS.get(event.get('route'), event.get('route'))}: {agents}")
             step["note"] = event.get("reason", "")
@@ -241,7 +244,8 @@ def pipeline_steps(events: List[Dict[str, Any]], judge: bool = False, running: b
                                    detail="Some details are missing, so the assistant asks for them")
         elif kind == "final":
             by_key["final"].update(status="done", elapsed_ms=event.get("elapsed_ms"),
-                                   detail=f"Written from {event.get('findings', 0)} agent finding(s)")
+                                   detail="The agent's reply is used as is, no rewrite needed" if event.get("direct")
+                                   else f"Written from {event.get('findings', 0)} agent finding(s)")
         elif kind == "guard_output":
             issues = event.get("issues") or []
             by_key["guard_out"].update(

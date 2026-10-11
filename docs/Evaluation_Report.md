@@ -15,8 +15,9 @@ date: "October 2026"
 | Intrusion-risk model | Held-out test set | ROC-AUC **0.9997**, recall 0.998, precision 0.991, false-alarm rate 0.7% |
 | Anomaly detector | Held-out test set, plus attacks hidden during training | ROC-AUC **0.855**; caught 71% of unseen Infiltration, 63% of unseen PortScan |
 | LLM-as-Judge | 6 planted-flaw answers; 15 real questions | Calibration **6/6**; 13/15 pass on the first run, all affected questions passed after 2 fixes |
-| DeepEval | 24 labelled cases, 5 metrics + exact checks | Faithfulness **0.95**, answer relevancy **0.95**, contextual relevancy 0.85, recommendation 0.88, safety 0.92, exact checks **98%** |
-| Automated tests | pytest, scripted fake LLM | **403** tests pass, no API key needed |
+| DeepEval | 24 labelled cases, 5 metrics + exact checks | Faithfulness **0.95**, answer relevancy **0.95**, contextual relevancy 0.85, recommendation 0.88, safety 0.92, exact checks **98%**. Re-run after the speed changes: faithfulness 0.97, relevancy 0.97, safety 0.93, exact checks 99% |
+| Response time | Same questions, before and after the speed changes | Investigations 72–133 s → **54–68 s**; simple questions 16–23 s → **7–13 s** |
+| Automated tests | pytest, scripted fake LLM | **413** tests pass, no API key needed |
 
 The assistant was evaluated with `openai/gpt-oss-20b` on NVIDIA NIM (free tier) as the assistant,
 the judge and the DeepEval evaluator. Runs were made on 9–11 October 2026.
@@ -212,6 +213,7 @@ quality 83% (5/6), contextual relevancy 75% (3/4) before the search fix.
 
 The only miss: for "Is this flow suspicious?" with a partial flow, the Risk & Priority agent
 assessed the risk but did not run the prioritiser, so no priority was given.
+Fixed (fix 42): the Risk & Priority agent must now report a priority for every single flow. Its prompt requires `prioritize_flow`, and if the LLM still skips it the agent runs the prioritiser itself and rewrites its findings with the result. Re-run of the three risk cases: priority 3/3 and priority in the answer 3/3 (partial flow: P4 with the reduced-input caveat).
 
 ## 6.4 Per case
 
@@ -223,7 +225,7 @@ assessed the risk but did not run the prioritiser, so no priority was given.
 | profile-ddos | classify | 4/4 | – | pass 4.75 |
 | risk-rank | risk | 5/5 | – | pass 5.00 |
 | risk-ddos-incident | risk | 7/7 | safety 0.60 | pass 5.00 |
-| risk-partial-flow | risk | 4/6 | – (priority missing) | pass 5.00 |
+| risk-partial-flow | risk | 4/6 → 6/6 after fix 42 | – (priority missing before the fix) | pass 5.00 |
 | risk-benign | risk | 7/7 | – | pass 5.00 |
 | search-ssh | search | 4/4 | contextual relevancy 0.40 → 0.83 after fix 40 | pass 5.00 |
 | search-ddos-port | search | 5/5 | answer relevancy 0.57 | pass 5.00 |
@@ -250,7 +252,7 @@ assessed the risk but did not run the prioritiser, so no priority was given.
 | "SSH brute force" searched without the attack-type filter; 2 of 5 results were web brute force | Real | Common names mapped to dataset labels (fix 40); re-run 5/5 SSH-Patator, contextual relevancy 0.83 |
 | An en dash in "Web Attack – XSS" failed the exact attack-type check | Check | Checks normalise typographic dashes (fix 41) |
 | search-numeric faithfulness 0.58 | Evaluator | The answer matched the tool results; the evaluator misread them. Exact checks passed |
-| Partial-flow risk question gave no priority | Real (open) | Listed as future work: always run the prioritiser with the risk assessment |
+| Partial-flow risk question gave no priority | Real | The agent must report a priority; if the LLM skips `prioritize_flow`, the agent runs it (fix 42). Re-run: priority 3/3 on the risk cases |
 
 ## 6.6 LLM-as-Judge versus DeepEval
 
@@ -260,7 +262,37 @@ classify-text-flow) DeepEval passed answers the judge failed or marked for revie
 against the evidence with rule caps; DeepEval scores individual dimensions more strictly. Using
 both, plus exact checks, gives a more reliable picture than either alone.
 
-## 6.7 RAGAS
+## 6.7 Re-run after the speed changes
+
+The agent graph was then changed to cut response time: an investigation runs its agents in two
+parallel stages (Classification + Risk & Priority, then Incident Search + Response), and a question
+answered by one agent uses that agent's reply directly instead of a separate rewrite. Measured on
+the live model, an investigation went from 72–133 s to 54–68 s and simple questions from 16–23 s
+to 7–13 s (one run each, so free-tier latency adds noise).
+
+All 24 cases were re-run on the final code (11 October 2026) to check that quality held:
+
+| Run | Exact checks | Faithfulness | Answer relevancy | Contextual relevancy | Recommendation | Safety | Judge agreement |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Before (sequential, rewrite) | 98% | 0.95 | 0.95 | 0.85 | 0.88 | 0.92 | 67% |
+| After (parallel, direct reply) | **99%** | **0.97** | **0.97** | 0.75 | **0.92** | **0.93** | **81%** |
+
+- **Exact checks:** every prediction, priority, cited ID, filter, caveat and guardrail check passed,
+  and no answer had an unverified incident ID or a dangerous command. The one miss was a routing
+  variation: "Is incident INC-000002 dangerous?" went to `investigate` instead of `risk` (the router
+  is unchanged; the answer still had the right attack type and P4).
+- **Contextual relevancy** fell because the evaluator scored the SSH and FTP searches 0.40 and 0.58
+  although both used the right attack-type filter and returned only SSH-Patator / FTP-Patator
+  incidents; its reasons misread the retrieved incidents. The baseline SSH search scored the same
+  0.40 before the filter fix, so this metric is noisy with the small evaluator on four cases.
+- **Found and fixed during the change:** in a first re-run, the Risk & Priority agent answering
+  alone wrote a "Similar past incidents" section without searching and named an invented ID
+  (the output guard marked it unverified). The direct-reply rules now forbid IDs no tool returned
+  and allow that section only after a search; the final re-run had no unverified IDs.
+- recommend-sqli faithfulness 0.50 and risk-ddos-incident answer relevancy 0.60 are the remaining
+  low scores; both answers passed the exact checks and the LLM-as-Judge.
+
+## 6.8 RAGAS
 
 RAGAS was not run. DeepEval's faithfulness, answer relevancy and contextual relevancy cover the same
 RAG triad through the same pluggable evaluator, and a second framework would have doubled the cost
@@ -274,16 +306,16 @@ on a rate-limited free LLM without measuring anything new.
 | `test_ml_service.py` | 17 | Predictions on real flows, partial input, explanations, batches |
 | `test_prioritization.py` | 21 | Score bands, overrides, batch ordering |
 | `test_agent_tools.py` | 23 | Every tool, error handling, retrieval-only search |
-| `test_agents.py` | 32 | Routing, agent order, tool loops, follow-ups, memory, fallbacks, trace |
+| `test_agents.py` | 41 | Routing, parallel stages, direct replies, tool loops, follow-ups, memory, fallbacks, trace |
 | `test_guardrails.py` | 70 | Blocked, allowed and redacted inputs; every output check |
 | `test_api.py` | 40 | Every endpoint, status codes, SSE stream, CSV upload, CORS, provider errors |
 | `test_auth.py` | 26 | Hashing, tokens, rate limit, accounts, conversation ownership, persistence |
 | `test_llm_config.py` | 13 | Provider selection, defaults, missing keys, rate limiter |
 | `test_judge.py` | 42 | Verdict rules, rule caps, JSON parsing, graph node, `/judge` |
 | `test_feedback.py` | 23 | Store, snapshots, corrections, export, guarded retraining |
-| `test_frontend.py` | 34 | API client, sign-in flow, formatting, progress tracker, every page rendered |
+| `test_frontend.py` | 35 | API client, sign-in flow, formatting, progress tracker, every page rendered |
 | `test_deepeval.py` | 16 | Case file validity, exact checks, metric selection, evaluator parsing, report |
-| **Total** | **403** | All pass in about 2 minutes |
+| **Total** | **413** | All pass in about 2 minutes |
 
 # 8. Sample outputs
 
@@ -316,10 +348,11 @@ no LLM call · checks 2/2
 # 9. Conclusions
 
 - The assistant is **factually reliable on what can be checked**: routing, predictions, cited IDs
-  and guardrails were correct in every case, and only one priority was missing.
+  and guardrails were correct in every case; the one missing priority has since been fixed.
 - LLM-graded quality is high (faithfulness and relevancy 0.95), with known, explained exceptions.
-- Evaluation **paid for itself**: it exposed three real defects (a misrouted question, a refused
-  redacted question, a search missing its filter), all fixed and re-verified.
+- Evaluation **paid for itself**: it exposed four real defects (a misrouted question, a refused
+  redacted question, a search missing its filter, a risk answer without a priority), all fixed and
+  re-verified.
 - **Limits:** the evaluator is the same small model as the assistant, the case set is small (24),
   and retrieval was measured on 12 queries. A stronger evaluator, more cases and per-query relevance
   judgements are the next steps.

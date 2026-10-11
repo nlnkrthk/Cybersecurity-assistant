@@ -420,8 +420,8 @@ def _label_notes(text: str, evidence: List[Dict[str, Any]], issues: List[Dict[st
 def _prompt_fragments() -> Tuple[str, ...]:
     from agents import prompts
 
-    texts = [prompts.ROUTER_PROMPT, prompts.SHARED_AGENT_RULES, prompts.FINAL_ANSWER_PROMPT,
-             *prompts.AGENT_PROMPTS.values()]
+    texts = [prompts.ROUTER_PROMPT, prompts.SHARED_AGENT_RULES, prompts.FINDINGS_ENDING,
+             prompts.DIRECT_REPLY_ENDING, prompts.FINAL_ANSWER_PROMPT, *prompts.AGENT_PROMPTS.values()]
     fragments = set()
     for text in texts:
         for piece in re.split(r"\n|(?<=[.:;])\s", text):

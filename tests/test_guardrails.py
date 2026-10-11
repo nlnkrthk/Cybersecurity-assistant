@@ -253,8 +253,9 @@ def test_secret_is_redacted_before_the_llm_sees_it():
 def test_output_guard_runs_on_final_answer_and_updates_history():
     llm = FakeLLM(
         routes=[route("classify"), route("general")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("Infiltration")],
-        final_replies=["INC-004393 is Infiltration, similar to INC-777777.", "ok"],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}),
+                       text("INC-004393 is Infiltration, similar to INC-777777.")],
+        final_replies=["ok"],
     )
     assistant = Assistant(llm=llm)
     thread = assistant.new_thread_id()
@@ -265,7 +266,7 @@ def test_output_guard_runs_on_final_answer_and_updates_history():
     assert result["trace"][-1]["type"] == "guard_output"
 
     assistant.ask("thanks", thread)
-    history = llm.final_inputs[1][-1].content
+    history = llm.final_inputs[0][-1].content  # the first turn needed no final rewrite
     assert f"INC-777777 {UNVERIFIED_MARK}" in history  # the guarded text is what the conversation keeps
 
 

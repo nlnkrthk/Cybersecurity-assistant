@@ -214,12 +214,12 @@ response recommendation.
 | `risk` | Risk & Priority | "Is this flow suspicious?", "Which of these is most urgent?" |
 | `search` | Incident Search | "Has an SSH brute force happened before?" |
 | `recommend` | Response | "How should I respond to a DoS Hulk attack?" |
-| `investigate` | Classification → Risk & Priority → Incident Search → Response | "Investigate INC-000035 and tell me how to respond" |
+| `investigate` | Classification + Risk & Priority (in parallel) → Incident Search + Response (in parallel) | "Investigate INC-000035 and tell me how to respond" |
 | `general` | none (answer directly) | "What is a DDoS?" |
 | `out_of_scope` | none (fixed reply) | unrelated requests, requests to build attacks |
 
-Routing keeps costs proportional: a classification question needs about 4 LLM calls and only an
-investigation uses all four agents (about 10 calls). Each agent runs a tool-calling loop of at most
+Routing keeps costs proportional: a classification question needs about 3 LLM calls and only an
+investigation uses all four agents (about 10–15 calls, in two parallel stages). Each agent runs a tool-calling loop of at most
 6 rounds. If the key metrics of a flow are missing (duration, packets, bytes), the turn ends with a
 follow-up question instead of a guess. The next turn resumes the same route and keeps the flow
 already identified.
@@ -239,10 +239,13 @@ messages to each other:
 | `follow_up` | agents or tools | graph (ends the turn with the question) |
 | `trace` | every node | front end (live tracker), API response |
 
-- **Handoff.** Agents run in plan order. Each receives the question, the conversation context and
-  the findings of the agents before it.
+- **Handoff in stages.** Agents run in stages; agents of one stage run in parallel. An
+  investigation runs Classification and Risk & Priority together (both only need the flow), then
+  Incident Search and Response together (both use the first stage's findings). Each agent receives
+  the question, the conversation context and the findings of earlier stages.
 - **One writer.** The final-answer node writes one reply from all findings, using only those facts
-  and citing incident IDs. Agents never answer the user directly.
+  and citing incident IDs. When a single agent answers the question, that agent writes the reply
+  under the same rules and it is used directly, saving one LLM call.
 - **Memory.** A LangGraph checkpointer keeps the state per conversation (`thread_id`). With
   `SqliteSaver`, conversations survive restarts, and earlier turns can still be found for feedback.
 - **Live progress.** Nodes emit trace events through LangGraph's stream writer; the API forwards
@@ -305,7 +308,7 @@ Evaluation is layered so that each kind of claim is checked by the cheapest reli
 
 | Layer | What it checks | Method |
 |---|---|---|
-| Automated tests | Code correctness | 403 pytest tests, no API key needed |
+| Automated tests | Code correctness | 413 pytest tests, no API key needed |
 | Retrieval | Search relevance | Hit@K, Precision@K, MRR on labelled queries (§4.5) |
 | ML models | Prediction quality | Held-out test sets, unseen-attack test (§5.5) |
 | LLM-as-Judge | Quality of each answer | 5 criteria, rule caps, calibrated |
@@ -313,7 +316,7 @@ Evaluation is layered so that each kind of claim is checked by the cheapest reli
 
 ## 6.1 Automated tests
 
-403 tests cover the feature parsing, models, prioritiser, tools, agent graph, guardrails (70
+413 tests cover the feature parsing, models, prioritiser, tools, agent graph, guardrails (70
 tests), judge, feedback, accounts, API and every front-end page. The agent graph runs with a
 **scripted fake LLM**, so tests are fast, free and repeatable, and can force rare cases such as
 refusals, unparsable routes, empty replies and tool loops.
@@ -368,7 +371,9 @@ on 10 of 10 planted cases: an invented fact gives faithfulness 0.00 and `rm -rf 
 
 - **Exact checks:** route 21/21, prediction 9/9, cited IDs 6/6, no unverified IDs or dangerous
   commands in 22/22 answers, every guardrail case correct. The only miss was priority 5/6: for a
-  partial flow, the Risk & Priority agent assessed risk but did not run the prioritiser.
+  partial flow, the Risk & Priority agent assessed risk but did not run the prioritiser. Fixed: the
+  agent now always reports a priority, running the prioritiser itself if the LLM skips it
+  (re-run: priority 3/3 on the risk cases).
 - **What evaluation found and fixed:**
   - A redacted password made the router refuse the question.
   - "SSH brute force" was searched without the attack-type filter (contextual relevancy 0.40
@@ -376,6 +381,11 @@ on 10 of 10 planted cases: an invented fact gives faithfulness 0.00 and `rm -rf 
   - An en dash in an attack name failed an exact check.
 - **Evaluator error:** one low faithfulness score (0.58) was a misreading by the evaluator, not an
   assistant error. This is why exact checks sit beside the LLM-graded metrics.
+
+After the speed changes (parallel agent stages, direct replies from single agents), all 24 cases
+were re-run: exact checks 99%, faithfulness 0.97, answer relevancy 0.97, safety 0.93,
+recommendation 0.92; contextual relevancy 0.75, where the evaluator misread two correctly filtered
+searches. Investigations went from 72–133 s to 54–68 s, simple questions from 16–23 s to 7–13 s.
 
 ## 6.5 Why both LLM-graded and exact metrics
 
@@ -402,7 +412,7 @@ dimension. The retrieval layer itself is measured directly with Hit@K, Precision
 | **Free LLM tiers** | Claude credit ran out; Gemini allows 20 requests/day; some NIM models take about 2 minutes per call | Provider-agnostic design; gpt-oss-20b on NIM; client-side rate limiter; resumable evaluation runs |
 | **Small model quirks** | Guided JSON output sometimes ran to the token limit; it adds general knowledge beyond the evidence | Plain JSON request validated with Pydantic first, structured output only as a fallback; the output guard and judge catch unsupported facts |
 | **Partial input** | Models trained on 24 metrics; users give 3–5 | Fill with normal medians, flag, lower confidence, ask only when key metrics are missing |
-| **Latency** | An investigation makes about 10 sequential LLM calls (1–3 minutes) | Routing runs only the needed agents; a live progress tracker shows what is happening |
+| **Latency** | An investigation made about 10 sequential LLM calls (1–3 minutes) | Routing runs only the needed agents; investigations run in two parallel stages and single-agent answers skip the rewrite (investigations about 1 minute, simple questions 5–15 s); a live progress tracker shows what is happening |
 | **Evaluating with a small evaluator** | One evaluator misjudgement | Calibration, exact checks beside the LLM metrics, judge–DeepEval comparison |
 
 ## 7.2 Design decisions and trade-offs
@@ -423,10 +433,8 @@ dimension. The retrieval layer itself is measured directly with Hit@K, Precision
 ## 7.3 Limitations and future work
 
 - A stronger evaluator model and a larger case set would make the DeepEval scores more reliable.
-- Run the prioritiser whenever risk is assessed, to fix the one missed priority.
 - Use the `GeneratedLabelledFlows` release of CIC-IDS2017 to enable the IP, protocol and timestamp
   filters, and group flows into multi-flow incidents.
-- Run independent agents in parallel to cut investigation time.
 - Keep users signed in across a browser refresh, and add HTTPS for any non-local deployment.
 
 # Appendix A. Requirement traceability

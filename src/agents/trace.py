@@ -7,13 +7,13 @@ live through LangGraph's custom stream, so callers can print them as they happen
 
 Event types:
     guard_input   input guardrail: action (allowed | redacted | blocked), category, matched, redactions
-    route         supervisor decision: route, reason, plan
+    route         supervisor decision: route, reason, plan, stages (agents of a stage run in parallel)
     agent_start   an agent begins
     tool_call     an agent calls a tool: tool, args
     tool_result   the tool returned: status, summary, elapsed_ms
     agent_end     an agent finished: outcome (findings | follow_up), llm_calls, tool_calls, elapsed_ms
     follow_up     the turn ends with a question to the user
-    final         the final answer node finished: elapsed_ms
+    final         the final answer node finished: elapsed_ms; direct = a single agent's reply used as is
     guard_output  output guardrail: issues found and fixed (empty list = passed)
     judge         LLM-as-Judge: verdict, overall score, per-criterion scores, unsupported claims
 """
@@ -161,7 +161,8 @@ def format_event(event: Dict[str, Any]) -> Optional[str]:
             return "[GUARD-OUT] passed, no changes"
         return "[GUARD-OUT] " + "; ".join(_describe_issue(i) for i in issues)
     if kind == "route":
-        plan = " -> ".join(AGENT_NAMES[a] for a in event["plan"]) or "no agents"
+        stages = event.get("stages") or [[a] for a in event["plan"]]
+        plan = " -> ".join(" + ".join(AGENT_NAMES[a] for a in stage) for stage in stages) or "no agents"
         return (
             f"[SUPERVISOR] route = {event['route']}{_secs(event)}\n"
             f"             reason: {event['reason']}\n"
@@ -182,6 +183,8 @@ def format_event(event: Dict[str, Any]) -> Optional[str]:
     if kind == "follow_up":
         return "[FOLLOW-UP] asking the user for missing or corrected information"
     if kind == "final":
+        if event.get("direct"):
+            return f"[FINAL ANSWER] the agent's reply, used as is{_secs(event)}"
         return f"[FINAL ANSWER] written from {event['findings']} agent finding(s){_secs(event)}"
     return None
 

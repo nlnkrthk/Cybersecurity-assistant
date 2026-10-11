@@ -37,8 +37,8 @@ def api():
 def classify_llm():
     return FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-000035"}), text("SSH-Patator")],
-        final_replies=["INC-000035 is SSH-Patator."],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-000035"}),
+                       text("INC-000035 is SSH-Patator.")],
     )
 
 
@@ -383,3 +383,15 @@ def test_signed_in_session_shows_the_app_and_logs_out(monkeypatch):
     logout.click().run()
     assert "auth_user" not in app.session_state and "auth_token" not in app.session_state
     assert [t.label for t in app.tabs] == ["Sign in", "Create account"]
+
+
+def test_pipeline_shows_parallel_stages_and_direct_reply():
+    route_event = {"type": "route", "route": "investigate", "reason": "full analysis",
+                   "plan": ["classification", "risk_priority", "incident_search", "response"],
+                   "stages": [["classification", "risk_priority"], ["incident_search", "response"]]}
+    planning = fmt.pipeline_steps([route_event])[1]
+    assert "Classification agent + Risk & Priority agent, then Incident Search agent + Response agent" in planning["detail"]
+
+    single = {"type": "route", "route": "classify", "reason": "r", "plan": ["classification"], "stages": [["classification"]]}
+    steps = fmt.pipeline_steps([single, {"type": "final", "findings": 1, "direct": True, "elapsed_ms": 1}])
+    assert "used as is" in next(s for s in steps if s["key"] == "final")["detail"]

@@ -1,7 +1,7 @@
 """
 Supervisor graph of the incident-response assistant.
 
-    START -> input_guard -> supervisor -> [agents in route order] -> final_answer -> output_guard -> [judge] -> END
+    START -> input_guard -> supervisor -> agents (one stage per pass) -> final_answer -> output_guard -> [judge] -> END
                   |                               +-> ask_follow_up -> output_guard  (key metrics missing)
                   +-> END  (blocked: prompt injection or harmful request; fixed reply)
 
@@ -9,8 +9,12 @@ The judge node (LLM-as-Judge) runs only when the caller asks for it (judge=True 
 and the turn produced a real answer (not blocked, out of scope or a follow-up question).
 
 The supervisor picks a route for the latest user message; each route maps to an
-ordered list of agents (agents.state.ROUTE_PLANS). Agents write findings into the
-shared state; the final answer node turns all findings into one reply. Conversations
+ordered list of agents (agents.state.ROUTE_PLANS), run in stages: agents of the same
+stage run in parallel (agents.state.ROUTE_STAGES; an investigation is two stages,
+Classification + Risk & Priority, then Incident Search + Response). Agents write findings
+into the shared state; the final answer node turns all findings into one reply. When a
+single agent answers the question, it writes the reply itself and the final answer node
+passes it through without another LLM call. Conversations
 are kept per thread_id by the checkpointer, so a follow-up answer resumes the analysis.
 """
 import json
@@ -27,7 +31,7 @@ from pydantic import BaseModel, Field, ValidationError
 from agents.guardrails import BLOCKED_MESSAGE_PLACEHOLDER, check_input, check_output
 from agents.judge import judge_answer, last_question, should_judge
 from agents.prompts import FINAL_ANSWER_PROMPT, ROUTER_PROMPT
-from agents.specialists import AGENT_TITLES, format_history, make_agent_node
+from agents.specialists import AGENT_TITLES, format_history, make_agents_node
 from agents.trace import emit, now_ms
 from agents.state import (
     CLASSIFICATION,
@@ -36,6 +40,7 @@ from agents.state import (
     RISK_PRIORITY,
     ROUTE_PLANS,
     AssistantState,
+    plan_stages,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,7 +202,7 @@ def route_message(llm, messages) -> RouteDecision:
     return RouteDecision(route="general", reason="Could not determine a route; answered as a general question.")
 
 
-def make_supervisor(llm):
+def make_supervisor(llm, parallel: bool = True):
     router = llm
 
     def supervisor(state: AssistantState) -> Dict[str, Any]:
@@ -223,6 +228,7 @@ def make_supervisor(llm):
             "route": decision.route,
             "reason": decision.reason,
             "plan": ROUTE_PLANS[decision.route],
+            "stages": plan_stages(decision.route, ROUTE_PLANS[decision.route], parallel),
             "elapsed_ms": round(now_ms() - started),
         })
         return {
@@ -254,18 +260,26 @@ EMPTY_REPLY_FALLBACK = (
 )
 
 
-def make_final_answer(llm):
+def make_final_answer(llm, direct_reply: bool = True):
     def final_answer(state: AssistantState) -> Dict[str, Any]:
         started = now_ms()
         trace = list(state.get("trace", []))
         findings = state.get("findings") or {}
 
-        def done(text: str) -> Dict[str, Any]:
-            emit(trace, {"type": "final", "findings": len(findings), "elapsed_ms": round(now_ms() - started)})
+        def done(text: str, direct: bool = False) -> Dict[str, Any]:
+            event = {"type": "final", "findings": len(findings), "elapsed_ms": round(now_ms() - started)}
+            if direct:
+                event["direct"] = True
+            emit(trace, event)
             return {"final_answer": text, "trace": trace}  # output_guard adds it to the conversation
 
         if state.get("route") == "out_of_scope":
             return done(OUT_OF_SCOPE_REPLY)
+
+        # A single agent already wrote the reply (see run_specialist(direct_reply=True)).
+        plan = state.get("plan") or []
+        if direct_reply and len(plan) == 1 and (findings.get(plan[0]) or "").strip():
+            return done(findings[plan[0]].strip(), direct=True)
 
         messages = state["messages"]
         parts = []
@@ -303,14 +317,13 @@ def next_step(state: AssistantState) -> str:
     if state.get("follow_up"):
         return "ask_follow_up"
     done = set(state.get("completed", []))
-    remaining = [agent for agent in state.get("plan", []) if agent not in done]
-    return remaining[0] if remaining else "final_answer"
+    return "agents" if any(agent not in done for agent in state.get("plan", [])) else "final_answer"
 
 
 # ============================================================================
 # Graph
 # ============================================================================
-def build_assistant(llm=None, checkpointer=None, judge_llm=None):
+def build_assistant(llm=None, checkpointer=None, judge_llm=None, parallel: bool = True, direct_reply: bool = True):
     """Compile the assistant graph.
 
     Args:
@@ -318,6 +331,8 @@ def build_assistant(llm=None, checkpointer=None, judge_llm=None):
         checkpointer: conversation store (default: in memory).
         judge_llm: model for LLM-as-Judge. Default: llm when one is given, else the judge
             model from .env (JUDGE_PROVIDER / JUDGE_MODEL), created only when first needed.
+        parallel: run independent agents of a route at the same time (ROUTE_STAGES).
+        direct_reply: a single agent writes the reply itself, skipping the final rewrite.
     """
     if llm is None:
         from agents.llm import get_chat_model
@@ -338,20 +353,18 @@ def build_assistant(llm=None, checkpointer=None, judge_llm=None):
 
     graph = StateGraph(AssistantState)
     graph.add_node("input_guard", input_guard)
-    graph.add_node("supervisor", make_supervisor(llm))
-    for agent in AGENTS:
-        graph.add_node(agent, make_agent_node(llm, agent))
-    graph.add_node("final_answer", make_final_answer(llm))
+    graph.add_node("supervisor", make_supervisor(llm, parallel))
+    graph.add_node("agents", make_agents_node(llm, parallel=parallel, direct_reply=direct_reply))
+    graph.add_node("final_answer", make_final_answer(llm, direct_reply))
     graph.add_node("ask_follow_up", ask_follow_up)
     graph.add_node("output_guard", output_guard)
     graph.add_node("judge", make_judge_node(get_judge_llm))
 
-    targets = [*AGENTS, "final_answer", "ask_follow_up"]
+    targets = ["agents", "final_answer", "ask_follow_up"]
     graph.add_edge(START, "input_guard")
     graph.add_conditional_edges("input_guard", after_input_guard, ["supervisor", END])
     graph.add_conditional_edges("supervisor", next_step, targets)
-    for agent in AGENTS:
-        graph.add_conditional_edges(agent, next_step, targets)
+    graph.add_conditional_edges("agents", next_step, targets)
     graph.add_edge("final_answer", "output_guard")
     graph.add_edge("ask_follow_up", "output_guard")
     graph.add_conditional_edges("output_guard", after_output_guard, ["judge", END])
@@ -363,8 +376,9 @@ def build_assistant(llm=None, checkpointer=None, judge_llm=None):
 class Assistant:
     """Convenience wrapper: ask questions in a conversation identified by thread_id."""
 
-    def __init__(self, llm=None, checkpointer=None, judge_llm=None):
-        self.graph = build_assistant(llm=llm, checkpointer=checkpointer, judge_llm=judge_llm)
+    def __init__(self, llm=None, checkpointer=None, judge_llm=None, parallel: bool = True, direct_reply: bool = True):
+        self.graph = build_assistant(llm=llm, checkpointer=checkpointer, judge_llm=judge_llm, parallel=parallel,
+                                     direct_reply=direct_reply)
         self._llm, self._judge_llm = llm, judge_llm
 
     @staticmethod

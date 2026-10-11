@@ -81,8 +81,8 @@ def test_cors_allows_streamlit_only(client):
 def test_chat_answers_with_trace_and_guardrails():
     llm = FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("Infiltration")],
-        final_replies=["INC-004393 is Infiltration."],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}),
+                       text("INC-004393 is Infiltration.")],
     )
     with make_client(llm) as c:
         r = c.post("/chat", json={"message": "What attack is INC-004393?"})
@@ -146,8 +146,7 @@ def test_chat_without_llm_returns_503():
 def test_chat_stream_sends_trace_then_result():
     llm = FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("list_attack_types", {}), text("15 types")],
-        final_replies=["There are 15."],
+        agent_replies=[tool_call("list_attack_types", {}), text("There are 15.")],
     )
     with make_client(llm) as c:
         r = c.post("/chat/stream", json={"message": "list attack types"})

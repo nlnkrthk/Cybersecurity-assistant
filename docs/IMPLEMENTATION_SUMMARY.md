@@ -485,7 +485,7 @@ rows, Infiltration 36, Heartbleed 11) and by the overlap between Web Attack Brut
 - Random Forest and HistGradientBoosting were compared with 5-fold cross-validation;
   HistGradientBoosting was selected on PR-AUC (0.99965 vs 0.99709).
 - Probabilities are **isotonic-calibrated** on the calibration set (Brier score 0.0038).
-- The decision threshold of 0.406 maximizes F2 (recall-weighted) on the calibration set.
+- The decision threshold of 0.413 maximizes F2 (recall-weighted) on the calibration set.
 - Risk bands are Critical ≥ 0.9, High ≥ 0.7, Medium ≥ 0.3, otherwise Low.
 
 | Test metric | Value |
@@ -627,7 +627,7 @@ files once.
 | Method | Returns |
 |---|---|
 | `classify(flow)` | Attack type, confidence, top 3 alternatives |
-| `predict_risk(flow)` | Calibrated intrusion probability, `is_intrusion` (threshold 0.406), risk level |
+| `predict_risk(flow)` | Calibrated intrusion probability, `is_intrusion` (threshold 0.413), risk level |
 | `detect_anomaly(flow)` | Anomaly score, its BENIGN percentile, level (Low/Medium/High), and the most unusual metrics (outside the 5th–95th BENIGN percentile) |
 | `predict(flow)` | All three, no SHAP (fast; used by prioritization and batches) |
 | `predict_batch(flows)` | `predict()` for many flows, vectorized |
@@ -738,14 +738,50 @@ Tools per agent (`TOOLS_BY_AGENT`):
 START → input_guard ─(blocked)──────────────────────────────────────────→ END
             │
             ▼
-        supervisor ──→ [agents in the route's order] ──→ final_answer ──→ output_guard → END
+        supervisor ──→ agents (one stage per pass) ──→ final_answer ──→ output_guard → END
                                    └──(key metrics missing)──→ ask_follow_up ──┘
 ```
 
 Built in `src/agents/graph.py` with `StateGraph(AssistantState)` and an `InMemorySaver`
 checkpointer, so each `thread_id` is a conversation with memory. Conditional edges after the
-supervisor and after every agent call `next_step()`: `ask_follow_up` if a follow-up is pending,
-else the first agent in the plan that hasn't run yet, else `final_answer`.
+supervisor and after the `agents` node call `next_step()`: `ask_follow_up` if a follow-up is
+pending, else `agents` while some agent of the plan hasn't run, else `final_answer`.
+
+**Parallel stages.** The `agents` node runs the next *stage* of the plan (`ROUTE_STAGES` in
+`src/agents/state.py`, `next_stage()`). Agents of one stage run at the same time in threads
+(`ContextThreadPoolExecutor`, which keeps live trace events flowing to the stream) and their
+results are merged in plan order (`merge_updates()`). An investigation has two stages:
+Classification + Risk & Priority (both only need the flow), then Incident Search + Response (both
+use the first stage's findings: the attack type for the search filter, the priority for the plan).
+Other routes have one agent. `Assistant(parallel=False)` restores one agent at a time.
+
+**Direct reply.** When a route has a single agent (`classify`, `risk`, `search`, `recommend`), the
+agent's prompt ends with `DIRECT_REPLY_ENDING` instead of `FINDINGS_ENDING`: it does the same tool
+analysis, then writes the reply for the analyst itself, and `final_answer` passes it through
+without another LLM call (trace event `final` with `direct: true`). An empty reply falls back to
+the normal final-answer call. `Assistant(direct_reply=False)` restores the separate rewrite.
+
+Measured on the live model (gpt-oss-20b on NVIDIA NIM, search indexes loaded as in the API, one
+run per question and mode, so free-tier latency adds noise):
+
+| Question | Before (sequential, rewrite) | After (parallel, direct reply) |
+|---|---:|---:|
+| Investigate INC-000035 and tell me how to respond | 72 s | 68 s |
+| Investigate INC-002545 | 133 s | 54 s |
+| What attack is INC-004393? | 17 s | 7 s |
+| Is INC-000002 dangerous? | 16 s | 13 s |
+| Has a similar SSH brute force incident occurred before? | 23 s | 7 s |
+
+Full DeepEval re-run on the final code (24 cases): exact checks 99%, faithfulness 0.97, answer
+relevancy 0.97, safety 0.93, recommendation 0.92, contextual relevancy 0.75 (the evaluator misread
+two correctly filtered searches); before the change 98% / 0.95 / 0.95 / 0.92 / 0.88 / 0.85. A first
+re-run showed a lone agent naming an incident ID it never retrieved (caught by the output guard),
+so the direct-reply rules forbid IDs no tool returned and a "Similar past incidents" section
+without a search.
+
+Single-agent questions save the final rewrite (one LLM call, 2–10 s). Investigations save the
+waiting time of two agents; they make about as many LLM calls as before (sometimes more, because
+the Risk & Priority agent no longer reuses the flow found by Classification).
 
 ### 13.2 Supervisor (router)
 
@@ -760,7 +796,7 @@ decision, with `with_structured_output(..., method="json_schema", include_raw=Tr
 | `risk` | Risk & Priority | "Is this flow suspicious?", "Which of these is most urgent?" |
 | `search` | Incident Search | "Has an SSH brute force happened before?" |
 | `recommend` | Response | "How should I respond to a DoS Hulk attack?" |
-| `investigate` | Classification → Risk & Priority → Incident Search → Response | "Investigate INC-000035 and tell me how to respond" |
+| `investigate` | Classification + Risk & Priority (parallel) → Incident Search + Response (parallel) | "Investigate INC-000035 and tell me how to respond" |
 | `general` | none (final answer only) | "What is a DDoS?", "What can you do?" |
 | `out_of_scope` | none (fixed reply) | Unrelated requests, malware or attack requests |
 
@@ -777,11 +813,11 @@ own system prompt (`src/agents/prompts.py`), running a tool-calling loop:
 - up to **6 tool rounds**; when the budget is used up, the agent is told to stop calling tools and
   give its findings;
 - the task message contains the last 8 conversation messages, the flow already identified this turn
-  (or earlier in the conversation), the latest message, and the findings of earlier agents this
-  turn;
+  (or earlier in the conversation), the latest message, and the findings of the agents of earlier
+  stages this turn;
 - if a tool returns `needs_follow_up`, or the agent replies with a line starting `QUESTION:`, the
   turn ends with that question to the user;
-- flow arguments from successful flow tools are shared with later agents, so they analyse the
+- flow arguments from successful flow tools are shared with later stages, so they analyse the
   same flow without asking again.
 
 Shared rules in every agent prompt: use only tool results for facts; never invent metric values,
@@ -793,7 +829,8 @@ general best practice as such.
 
 ### 13.4 Final answer
 
-The `final_answer` node writes the single reply from the agents' findings and the conversation,
+When a single agent answered (direct reply), its reply is used as is. Otherwise the
+`final_answer` node writes the single reply from the agents' findings and the conversation,
 using only the findings: no new facts, numbers, IDs or attack types; confidence caveats always
 stated; historical incident IDs cited. Sections, when relevant: Assessment, Why, Similar past
 incidents, Recommended actions, Confidence & limitations. `general` questions are answered briefly
@@ -1391,7 +1428,8 @@ top 1/1, cited incident IDs 6/6, profile used, search attack type 3/3, port filt
 condition, both caveats, both blocks, redaction with no secret leak, impossible value rejected, no
 unverified IDs and no dangerous commands in 22/22 answers. Only miss: **priority 5/6**, because for
 "Is this flow suspicious?" (partial flow) the Risk & Priority agent assessed the risk but never ran
-the prioritiser.
+the prioritiser. Fixed by fix 42; a re-run of the three risk cases gave priority 3/3 and priority in
+the answer 3/3.
 
 **What the metrics flagged** (all 7 cases had LLM-as-Judge "pass"):
 
@@ -1426,16 +1464,16 @@ cleaned flows, one flow per class, a full flow and the ML service). Run with
 | `test_ml_service.py` | 17 | Predictions on real flows, partial input, explanations, filled features excluded from reasons, batches |
 | `test_prioritization.py` | 21 | Score bands, each override, batch ordering, follow-up handling |
 | `test_agent_tools.py` | 23 | Every tool, error handling, retrieval-only search, attack-type matching |
-| `test_agents.py` | 32 | Routing, agent order, tool loop and budget, follow-ups across turns, memory, refusal and parse fallbacks, trace events and formatting |
+| `test_agents.py` | 41 | Routing, parallel stages and direct replies, tool loop and budget, guaranteed priority on risk answers, follow-ups across turns, memory, refusal and parse fallbacks, trace events and formatting |
 | `test_guardrails.py` | 70 | Blocked, allowed and redacted inputs; every output check; plausibility errors; guard nodes in the graph |
 | `test_api.py` | 40 | Every endpoint, status codes, SSE stream, threads and history, CSV upload, CORS, request IDs, LLM-provider errors |
 | `test_llm_config.py` | 13 | Provider selection, defaults, missing keys, rate limiter, `LLMClient` following `LLM_PROVIDER` |
 | `test_judge.py` | 42 | Verdict rules, applicable criteria, judge input and trimming, JSON parsing and fallback, provider errors, rule caps, graph node (on request, `JUDGE_MODE`, skipped turns, failures), `judge_last_turn`, `/chat` and `/judge` endpoints |
 | `test_feedback.py` | 23 | Store (upsert, filters, corrections, stats and judge agreement), snapshots (incl. an incident identified only by its copied metrics), recording real turns and earlier turns, label validation, `analyst_feedback` in tools, API endpoints and CSV export, correction collection (majority, ties, skipped flows), retraining comparison and promotion guard (synthetic data), active-version pointer, `activate`/`list_versions` |
 | `test_auth.py` | 26 | Password hashing and verification, token digests, username and password rules, login limiter (window, case, reset), account store (case-insensitive users, sessions that expire and are revoked, digest-only storage, conversation claim / title / rename / order / delete), `/auth` endpoints (signup, login, logout, me, 409/422, generic 401, 429), every protected endpoint without a token, conversations listed / titled / renamed / deleted, titles never contain a redacted secret, other users get 404 on history, continue, stream, rename, delete, feedback and judge, client-chosen IDs claimed once, conversations surviving an API restart, tool evidence and earlier turns through the SQLite checkpointer |
-| `test_frontend.py` | 34 | Accounts and saved conversations through the client (401 when signed out, separate tokens on a shared pool, signup / login / logout, list / rename / delete), sign-in page shown alone until signed in, repeat-password check, Log out; API client against the real app (health, explain, follow-up, 404/422, batch and CSV ranking, chat stream → feedback → stats → export → history → delete, stream error event, unreachable API), SSE parsing, error messages, flow fields = model features, example incidents carry their labels, formatting helpers, progress tracker (live, finished, blocked, follow-up, judge, HTML escaping), every page rendered with Streamlit's `AppTest` while the API is down |
+| `test_frontend.py` | 35 | Accounts and saved conversations through the client (401 when signed out, separate tokens on a shared pool, signup / login / logout, list / rename / delete), sign-in page shown alone until signed in, repeat-password check, Log out; API client against the real app (health, explain, follow-up, 404/422, batch and CSV ranking, chat stream → feedback → stats → export → history → delete, stream error event, unreachable API), SSE parsing, error messages, flow fields = model features, example incidents carry their labels, formatting helpers, progress tracker (live, finished, blocked, follow-up, judge, HTML escaping), every page rendered with Streamlit's `AppTest` while the API is down |
 | `test_deepeval.py` | 16 | Case file valid and consistent with the data (labels, priorities, ranking), unknown keys rejected, evidence → context, every deterministic check passing and failing (incl. typographic dashes), applicable metrics per route, evaluator JSON parsing with one retry, `measure` never raising, resumable generate (failed cases retried) and score, report numbers, Markdown and CSV |
-| **Total** | **403** | All passing (about 1–2 minutes). `pytest.ini` disables DeepEval's pytest plugin, which would otherwise hook every test session |
+| **Total** | **413** | All passing (about 1–2 minutes). `pytest.ini` disables DeepEval's pytest plugin, which would otherwise hook every test session |
 
 API tests sign in as a fresh throwaway user (`tests/auth_utils.SignedInClient`); `conftest.py`
 points the feedback, accounts and conversation databases at temporary files.
@@ -1508,7 +1546,7 @@ message answered in 6 ms; `/chat/stream` delivered `trace` then `result` events;
 upload ranked an incident (P2) and a new flow (P4); unknown incident → 404; `/chat` with an
 exhausted provider account → 502 with the provider's message.
 
-**Test suite:** 403 tests pass (§22).
+**Test suite:** 413 tests pass (§22).
 
 ### 23.2 Front end (2026-10-10, gpt-oss-20b via NVIDIA NIM)
 
@@ -1531,8 +1569,8 @@ on three runs with the new rules; the old rules sent the DDoS question to `gener
 
 ### 23.3 Known limitations
 
-- An investigation makes about 10 sequential LLM calls (≈ 1–3 minutes depending on the provider
-  and rate limits), and some lookups are repeated by more than one agent.
+- An investigation makes about 10–15 LLM calls in two parallel stages (about 1 minute on the
+  NVIDIA free tier; simple questions 5–15 s), and some lookups are repeated by more than one agent.
 - Partial input biases predictions towards BENIGN; this is stated in every such answer.
 - Without the attack-type filter, search can mix SSH and web brute force; the agents set the
   filter when the type is known.
@@ -1601,6 +1639,7 @@ Bugs found and fixed while building the ML, services, agents and API:
 | 39 | `prompts.py` (router) | Found by the DeepEval smoke run: "My admin password is [REDACTED_PASSWORD] - what attack is INC-000035?" was routed `out_of_scope` ("user discloses credentials") after the input guard had already removed the password | Router rule: `[REDACTED_…]` markers mean the secret is gone; route the rest. Live: password, API key and email cases routed correctly (2 runs each), keylogger still refused |
 | 40 | `prompts.py` (search agent) | Found by DeepEval (contextual relevancy 0.40): "SSH brute force" searched without the attack-type filter, mixing in web brute force | Search guidance maps common names to dataset labels (SSH brute force = SSH-Patator, …). Re-run: filter set, 5/5 correct type (SSH, FTP and the SSH recommendation) |
 | 41 | `evaluation/checks.py` | "Web Attack – XSS" (en dash) in an answer failed the exact attack-type check | Checks compare with typographic dashes normalised |
+| 42 | `specialists.py`, `prompts.py` (Risk & Priority agent) | Found by DeepEval (priority 5/6): for a partial flow the agent assessed the risk but never called the prioritiser, so the answer had no priority | The prompt requires `prioritize_flow` for every single flow; `ensure_priority()` runs it when the LLM still skips it (marked `auto` in the evidence and trace) and has the agent rewrite its findings, falling back to appending the priority line. Re-run: priority 3/3 on the risk cases |
 
 ---
 
@@ -1637,10 +1676,13 @@ Bugs found and fixed while building the ML, services, agents and API:
 12. **Routing, not a fixed pipeline.** The supervisor runs only the agents a question needs. A
     classification question costs about 4 LLM calls; only investigations use all four agents.
 13. **The RAG tool retrieves; agents write.** Answer generation happens once, in the final-answer
-    node, from all agents' findings, instead of separate generated answers inside tools.
-14. **Tools never raise.** Errors come back as data, so the agent can fix its call or explain the
+    node from all agents' findings (or by the only agent of a single-agent route), instead of
+    separate generated answers inside tools.
+14. **Parallel where independent.** Agents that only need the flow run together, and so do the
+    agents that only need their findings: an investigation is two stages instead of four steps.
+15. **Tools never raise.** Errors come back as data, so the agent can fix its call or explain the
     problem, and the API maps them to precise HTTP codes.
-15. **Deterministic guardrails around a probabilistic model.** Rule-based input and output checks
+16. **Deterministic guardrails around a probabilistic model.** Rule-based input and output checks
     are fast, free, testable and predictable; the LLM's own refusal handling is a second layer.
 16. **Observable by default.** Every turn returns a structured trace (route, agents, tools,
     timings, guardrails), streamed live to the console and the API.

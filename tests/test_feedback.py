@@ -141,8 +141,9 @@ def test_snapshot_without_flow():
 def classify_assistant(extra_routes=(), extra_finals=()):
     llm = FakeLLM(
         routes=[route("classify"), *extra_routes],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("Infiltration 90%")],
-        final_replies=["INC-004393 is Infiltration.", *extra_finals],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}),
+                       text("INC-004393 is Infiltration.")],
+        final_replies=[*extra_finals],
     )
     return Assistant(llm=llm)
 

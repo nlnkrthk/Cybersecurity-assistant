@@ -212,8 +212,8 @@ def test_title_never_contains_a_redacted_secret():
 def test_users_cannot_touch_each_others_conversations():
     llm = FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("Infiltration")],
-        final_replies=["INC-004393 is Infiltration."],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}),
+                       text("INC-004393 is Infiltration.")],
     )
     app = make_app(llm)
     with SignedInClient(app) as alice:
@@ -275,8 +275,9 @@ def test_sqlite_checkpointer_keeps_tool_evidence_and_turn_history(tmp_path):
     and earlier turns can still be found for feedback."""
     llm = FakeLLM(
         routes=[route("classify"), route("general")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("Infiltration")],
-        final_replies=["INC-004393 is Infiltration.", "You're welcome."],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}),
+                       text("INC-004393 is Infiltration.")],
+        final_replies=["You're welcome."],
     )
     bot = Assistant(llm=llm, checkpointer=open_checkpointer(tmp_path / "chats.db"))
     first = bot.ask("What attack is INC-004393?", "t1")

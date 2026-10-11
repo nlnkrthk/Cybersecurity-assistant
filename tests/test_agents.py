@@ -1,24 +1,39 @@
 """
 Graph tests with a scripted fake LLM (no API calls). The tools and ML models are real.
 """
+import threading
 from collections import deque
 
 import pytest
 from langchain_core.messages import AIMessage
 
 from agents.graph import OUT_OF_SCOPE_REPLY, Assistant, RouteDecision, next_step
-from agents.prompts import ROUTER_PROMPT
+from agents.prompts import AGENT_PROMPTS, DIRECT_REPLY_ENDING, FINDINGS_ENDING, ROUTER_PROMPT
 from agents.specialists import MAX_TOOL_ROUNDS, build_task
+from agents.state import next_stage, plan_stages
+
+
+def agent_of(messages):
+    """Which agent a request comes from, by its system prompt."""
+    return next(name for name, prompt in AGENT_PROMPTS.items() if messages[0].content.startswith(prompt))
 
 
 class FakeLLM:
-    """Scripted chat model: separate queues for the router, tool-using agents and the final answer."""
+    """Scripted chat model: separate queues for the router, tool-using agents and the final answer.
+
+    agent_replies is one queue in call order across all agents, or a dict of queues per agent
+    (needed when agents run in parallel, so the call order between agents is not fixed).
+    """
 
     def __init__(self, routes=(), agent_replies=(), final_replies=()):
         self.routes = deque(routes)                # RouteDecision | "refusal" | "garbage" | Exception
-        self.agent_replies = deque(agent_replies)  # AIMessage, in call order across all agents
+        if isinstance(agent_replies, dict):        # AIMessage | callable(messages) -> AIMessage
+            self.agent_replies = {agent: deque(replies) for agent, replies in agent_replies.items()}
+        else:
+            self.agent_replies = deque(agent_replies)
         self.final_replies = deque(final_replies)  # str
         self.router_inputs, self.agent_inputs, self.final_inputs = [], [], []
+        self.inputs_by_agent = {}
 
     # router fallback: llm.with_structured_output(RouteDecision, method=..., include_raw=True)
     def with_structured_output(self, schema, **kwargs):
@@ -57,8 +72,12 @@ class FakeLLM:
 
         class Bound:
             def invoke(self, messages):
+                agent = agent_of(messages)
                 fake.agent_inputs.append(list(messages))
-                return fake.agent_replies.popleft()
+                fake.inputs_by_agent.setdefault(agent, []).append(list(messages))
+                queue = fake.agent_replies[agent] if isinstance(fake.agent_replies, dict) else fake.agent_replies
+                reply = queue.popleft()
+                return reply(messages) if callable(reply) else reply
 
         return Bound()
 
@@ -86,49 +105,119 @@ def text(content):
 def test_classify_route_runs_one_agent_with_real_tool():
     llm = FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("- Infiltration, 90%")],
-        final_replies=["It is Infiltration."],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("It is Infiltration.")],
     )
     result = Assistant(llm=llm).ask("What attack is INC-004393?")
 
     assert result["route"] == "classify"
     assert result["agents_run"] == ["classification"]
-    assert result["answer"] == "It is Infiltration."
+    assert result["answer"] == "It is Infiltration."  # the agent's reply, no final rewrite
+    assert llm.final_inputs == []
+    assert llm.agent_inputs[0][0].content.endswith(DIRECT_REPLY_ENDING)
+    assert [e for e in result["trace"] if e["type"] == "final"][0]["direct"]
     assert result["evidence"][0]["result"]["attack_type"]["prediction"] == "Infiltration"
     assert result["flow_args"] == {"incident_id": "INC-004393"}
+
+
+def test_single_agent_findings_go_through_final_answer_when_direct_reply_is_off():
+    llm = FakeLLM(
+        routes=[route("classify")],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("- Infiltration, 90%")],
+        final_replies=["It is Infiltration."],
+    )
+    result = Assistant(llm=llm, direct_reply=False).ask("What attack is INC-004393?")
+    assert result["answer"] == "It is Infiltration."
+    assert llm.agent_inputs[0][0].content.endswith(FINDINGS_ENDING)
     assert "- Infiltration, 90%" in llm.final_inputs[0][1].text  # findings reach the final answer node
 
 
+def test_empty_direct_reply_falls_back_to_the_final_answer_node():
+    llm = FakeLLM(routes=[route("classify")], agent_replies=[text("")], final_replies=["rescued"])
+    result = Assistant(llm=llm).ask("classify INC-000001")
+    assert result["answer"] == "rescued"
+
+
 # ---------------------------------------------------------------- multi-agent route
-def test_investigate_runs_all_agents_in_order_and_shares_findings():
+INVESTIGATE_REPLIES = {
+    "classification": [text("class findings")], "risk_priority": [text("risk findings")],
+    "incident_search": [text("search findings")], "response": [text("response plan")],
+}
+
+
+def test_investigate_runs_two_parallel_stages_and_shares_findings():
+    llm = FakeLLM(routes=[route("investigate")], agent_replies=INVESTIGATE_REPLIES, final_replies=["full report"])
+    result = Assistant(llm=llm).ask("Investigate INC-000035")
+
+    assert result["agents_run"] == ["classification", "risk_priority", "incident_search", "response"]
+    assert list(result["findings"]) == result["agents_run"]  # merged in plan order
+    route_event = next(e for e in result["trace"] if e["type"] == "route")
+    assert route_event["stages"] == [["classification", "risk_priority"], ["incident_search", "response"]]
+    # stage 2 sees stage 1's findings; agents of the same stage do not see each other's
+    for agent in ("incident_search", "response"):
+        task = llm.inputs_by_agent[agent][0][1].text
+        assert "class findings" in task and "risk findings" in task
+    assert "class findings" not in llm.inputs_by_agent["risk_priority"][0][1].text
+    assert "search findings" not in llm.inputs_by_agent["response"][0][1].text
+    assert llm.inputs_by_agent["response"][0][0].content.endswith(FINDINGS_ENDING)
+    final_prompt = llm.final_inputs[0][1].text
+    for findings in ["class findings", "risk findings", "search findings", "response plan"]:
+        assert findings in final_prompt
+    assert result["answer"] == "full report"
+
+
+def test_agents_of_a_stage_really_run_at_the_same_time():
+    barrier = threading.Barrier(2, timeout=10)  # breaks (and the test fails) if the agents run one after another
+
+    def meet(reply):
+        def answer(messages):
+            barrier.wait()
+            return text(reply)
+        return answer
+
+    llm = FakeLLM(
+        routes=[route("investigate")],
+        agent_replies={"classification": [meet("class")], "risk_priority": [meet("risk")],
+                       "incident_search": [text("search")], "response": [text("plan")]},
+        final_replies=["report"],
+    )
+    result = Assistant(llm=llm).ask("Investigate INC-000035")
+    assert result["findings"]["classification"] == "class" and result["findings"]["risk_priority"] == "risk"
+
+
+def test_parallel_off_runs_agents_one_by_one():
     llm = FakeLLM(
         routes=[route("investigate")],
         agent_replies=[text("class findings"), text("risk findings"), text("search findings"), text("response plan")],
         final_replies=["full report"],
     )
-    result = Assistant(llm=llm).ask("Investigate INC-000035")
-
+    result = Assistant(llm=llm, parallel=False).ask("Investigate INC-000035")
     assert result["agents_run"] == ["classification", "risk_priority", "incident_search", "response"]
-    assert list(result["findings"]) == result["agents_run"]
-    response_task = llm.agent_inputs[3][1].text
-    assert "class findings" in response_task and "search findings" in response_task
-    final_prompt = llm.final_inputs[0][1].text
-    for findings in ["class findings", "risk findings", "search findings", "response plan"]:
-        assert findings in final_prompt
+    assert "class findings" in llm.inputs_by_agent["risk_priority"][0][1].text
+    assert "search findings" in llm.inputs_by_agent["response"][0][1].text
 
 
-def test_flow_identified_by_first_agent_is_passed_to_later_agents():
+def test_follow_up_from_a_parallel_stage_stops_the_turn():
     llm = FakeLLM(
         routes=[route("investigate")],
-        agent_replies=[
-            tool_call("explain_flow", {"incident_id": "INC-000035"}), text("SSH-Patator"),
-            text("risk"), text("search"), text("plan"),
-        ],
+        agent_replies={"classification": [text("QUESTION: Which flow?")], "risk_priority": [text("risk")]},
+    )
+    result = Assistant(llm=llm).ask("Investigate it")
+    assert result["needs_follow_up"] and result["answer"] == "Which flow?"
+    assert "incident_search" not in llm.inputs_by_agent and llm.final_inputs == []
+
+
+def test_flow_identified_in_the_first_stage_is_passed_to_the_next_stage():
+    llm = FakeLLM(
+        routes=[route("investigate")],
+        agent_replies={
+            "classification": [tool_call("explain_flow", {"incident_id": "INC-000035"}), text("SSH-Patator")],
+            "risk_priority": [text("risk")], "incident_search": [text("search")], "response": [text("plan")],
+        },
         final_replies=["report"],
     )
     Assistant(llm=llm).ask("Investigate INC-000035")
-    risk_task = llm.agent_inputs[2][1].text
-    assert "Flow already identified this turn" in risk_task and "INC-000035" in risk_task
+    search_task = llm.inputs_by_agent["incident_search"][0][1].text
+    assert "Flow already identified this turn" in search_task and "INC-000035" in search_task
 
 
 # ---------------------------------------------------------------- follow-up across turns
@@ -137,9 +226,8 @@ def test_missing_metrics_ask_follow_up_then_resume():
         routes=[route("risk"), route("risk")],
         agent_replies=[
             tool_call("assess_intrusion_risk", {"flow_duration": "2 s", "total_fwd_packets": 10, "total_bwd_packets": 8}),
-            text("- low risk"),
+            text("Not suspicious."),
         ],
-        final_replies=["Not suspicious."],
     )
     assistant = Assistant(llm=llm)
     thread = assistant.new_thread_id()
@@ -157,6 +245,54 @@ def test_missing_metrics_ask_follow_up_then_resume():
     agent_task = llm.agent_inputs[1][1].text
     assert "previous assistant turn asked the user for missing metrics" in agent_task
     assert "Latest flow analysed earlier in this conversation" in agent_task
+
+
+# ---------------------------------------------------------------- risk answers always carry a priority
+FULL_FLOW = {"flow_duration": "2 s", "total_fwd_packets": 10, "total_bwd_packets": 8,
+             "total_len_fwd": "1.2 KB", "total_len_bwd": "4 KB"}
+
+
+def _priority_calls(result):
+    return [e for e in result["evidence"] if e["tool"] == "prioritize_flow"]
+
+
+def test_risk_agent_runs_prioritiser_when_llm_skips_it():
+    llm = FakeLLM(
+        routes=[route("risk")],
+        agent_replies=[tool_call("assess_intrusion_risk", FULL_FLOW), text("- low risk"),
+                       text("- low risk\n- priority P4")],
+    )
+    result = Assistant(llm=llm).ask("Is this flow suspicious?")
+
+    auto = _priority_calls(result)
+    assert len(auto) == 1 and auto[0]["auto"] and auto[0]["args"] == FULL_FLOW
+    assert auto[0]["result"]["priority"]["priority"] in {"P1", "P2", "P3", "P4"}
+    assert result["findings"]["risk_priority"] == "- low risk\n- priority P4"
+    rewrite_request = llm.agent_inputs[-1][-1].text
+    assert "prioritisation tool was run" in rewrite_request and auto[0]["result"]["priority"]["priority"] in rewrite_request
+    assert any(e.get("auto") for e in result["trace"] if e["type"] == "tool_call")
+
+
+def test_risk_agent_does_not_reprioritise_when_priority_exists():
+    llm = FakeLLM(
+        routes=[route("risk")],
+        agent_replies=[tool_call("prioritize_flow", {"incident_id": "INC-000002"}), text("P4")],
+    )
+    result = Assistant(llm=llm).ask("Is incident INC-000002 dangerous?")
+    assert len(_priority_calls(result)) == 1 and not _priority_calls(result)[0].get("auto")
+    assert len(llm.agent_inputs) == 2
+
+
+def test_auto_priority_is_appended_when_rewrite_fails():
+    llm = FakeLLM(
+        routes=[route("risk")],
+        agent_replies=[tool_call("assess_intrusion_risk", {"incident_id": "INC-000002"}), text("- low risk"),
+                       tool_call("list_attack_types", {})],  # rewrite ignored the instruction
+    )
+    result = Assistant(llm=llm).ask("Is incident INC-000002 dangerous?")
+    priority = _priority_calls(result)[0]["result"]["priority"]["priority"]
+    findings = result["findings"]["risk_priority"]
+    assert findings.startswith("- low risk") and f"Priority (prioritize_flow): {priority}" in findings
 
 
 def test_agent_question_line_becomes_follow_up():
@@ -214,12 +350,11 @@ def test_unknown_tool_and_bad_args_become_error_evidence():
             tool_call("classify_attack_type", {"flow_duration": -5, "total_fwd_packets": 1}, "c2"),
             text("could not classify"),
         ],
-        final_replies=["sorry"],
     )
     result = Assistant(llm=llm).ask("classify")
     assert [e["result"]["status"] for e in result["evidence"]] == ["error", "error"]
     assert "Unknown tool" in result["evidence"][0]["result"]["error"]
-    assert result["answer"] == "sorry"
+    assert result["answer"] == "could not classify"
 
 
 def test_tool_loop_is_bounded():
@@ -236,7 +371,7 @@ def test_tool_loop_is_bounded():
 
 def test_empty_final_reply_falls_back_to_findings():
     llm = FakeLLM(routes=[route("classify")], agent_replies=[text("raw findings")], final_replies=[""])
-    result = Assistant(llm=llm).ask("classify INC-000001")
+    result = Assistant(llm=llm, direct_reply=False).ask("classify INC-000001")
     assert "raw findings" in result["answer"]
 
 
@@ -247,10 +382,21 @@ def test_empty_message_rejected():
 
 # ---------------------------------------------------------------- helpers
 def test_next_step():
-    assert next_step({"plan": ["classification", "response"], "completed": []}) == "classification"
-    assert next_step({"plan": ["classification", "response"], "completed": ["classification"]}) == "response"
+    assert next_step({"plan": ["classification", "response"], "completed": []}) == "agents"
+    assert next_step({"plan": ["classification", "response"], "completed": ["classification"]}) == "agents"
     assert next_step({"plan": ["classification"], "completed": ["classification"]}) == "final_answer"
     assert next_step({"plan": ["classification"], "completed": [], "follow_up": "q?"}) == "ask_follow_up"
+
+
+def test_plan_stages_and_next_stage():
+    plan = ["classification", "risk_priority", "incident_search", "response"]
+    assert plan_stages("investigate", plan) == [["classification", "risk_priority"], ["incident_search", "response"]]
+    assert plan_stages("investigate", plan, parallel=False) == [[a] for a in plan]
+    assert plan_stages("risk", ["risk_priority"]) == [["risk_priority"]]
+    state = {"route": "investigate", "plan": plan, "completed": []}
+    assert next_stage(state) == ["classification", "risk_priority"]
+    assert next_stage({**state, "completed": ["classification", "risk_priority"]}) == ["incident_search", "response"]
+    assert next_stage({**state, "completed": plan}) == []
 
 
 def test_build_task_includes_history_and_findings():
@@ -308,8 +454,7 @@ def test_trace_resets_each_turn_and_records_follow_up():
 def test_stream_yields_live_events_then_result():
     llm = FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("list_attack_types", {}), text("15 types")],
-        final_replies=["answer"],
+        agent_replies=[tool_call("list_attack_types", {}), text("answer")],
     )
     items = list(Assistant(llm=llm).stream("list attack types"))
     kinds = [kind for kind, _ in items]

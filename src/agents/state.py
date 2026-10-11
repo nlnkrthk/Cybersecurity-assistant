@@ -23,6 +23,31 @@ ROUTE_PLANS: Dict[str, List[str]] = {
 }
 ROUTES = tuple(ROUTE_PLANS)
 
+# Agents that can run at the same time. Classification and Risk & Priority only need the flow;
+# Incident Search and Response use their findings (attack type for the search filter, priority for
+# the plan) and do not depend on each other. Routes not listed run one agent per stage.
+ROUTE_STAGES: Dict[str, List[List[str]]] = {
+    "investigate": [[CLASSIFICATION, RISK_PRIORITY], [INCIDENT_SEARCH, RESPONSE]],
+}
+
+
+def plan_stages(route: Optional[str], plan: List[str], parallel: bool = True) -> List[List[str]]:
+    """The plan as stages of agents that run together (one agent per stage when not parallel)."""
+    stages = ROUTE_STAGES.get(route) if parallel else None
+    if stages is None or sorted(a for stage in stages for a in stage) != sorted(plan):
+        return [[agent] for agent in plan]
+    return [list(stage) for stage in stages]
+
+
+def next_stage(state: "AssistantState", parallel: bool = True) -> List[str]:
+    """The agents to run next: the unfinished agents of the first unfinished stage."""
+    done = set(state.get("completed", []))
+    for stage in plan_stages(state.get("route"), state.get("plan", []), parallel):
+        remaining = [agent for agent in stage if agent not in done]
+        if remaining:
+            return remaining
+    return []
+
 
 class AssistantState(TypedDict, total=False):
     # Conversation shown to the user: user messages and final answers / follow-up questions.

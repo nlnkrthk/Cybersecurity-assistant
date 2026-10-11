@@ -223,8 +223,7 @@ def test_guard_issues_from_graph_are_used_for_caps():
 def classify_llm(final="INC-004393 is Infiltration."):
     return FakeLLM(
         routes=[route("classify")],
-        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text("Infiltration 90%")],
-        final_replies=[final],
+        agent_replies=[tool_call("classify_attack_type", {"incident_id": "INC-004393"}), text(final)],
     )
 
 

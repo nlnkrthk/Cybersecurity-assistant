@@ -299,7 +299,7 @@ def agent_workflow() -> None:
 
     routes = [("classify", "Classification", "agent"), ("risk", "Risk & Priority", "agent"),
               ("search", "Incident Search", "agent"), ("recommend", "Response", "agent"),
-              ("investigate", "All four agents", "in this order"), ("general / out of scope", "No tools", "answer directly")]
+              ("investigate", "All four agents", "2 parallel stages"), ("general / out of scope", "No tools", "answer directly")]
     col_w, gap, x0 = 168, 14, 33
     centers = []
     for i, (route, name, sub) in enumerate(routes):
@@ -318,8 +318,8 @@ def agent_workflow() -> None:
 
     c.box(x0, 590, 440, 72, "Follow-up question", ["key metrics missing: asks for duration,", "packets or bytes instead of guessing"],
           colors=AMBER)
-    c.box(520, 590, 587, 72, "Final answer", ["Assessment · Why (SHAP) · Similar incidents ·",
-                                              "Recommended actions · Confidence and limitations"], colors=VIOLET)
+    c.box(520, 590, 587, 72, "Final answer", ["Assessment · Why · Similar incidents · Actions ·",
+                                              "Confidence  (one agent: its reply, no rewrite)"], colors=VIOLET)
     c.arrow([(253, 534), (253, 590)], "metrics missing", label_at=(263, 562))
     c.arrow([(700, 534), (700, 590)], "findings", label_at=(710, 562))
     c.arrow([(centers[5], 414), (centers[5], 590)])
